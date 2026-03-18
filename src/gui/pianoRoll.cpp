@@ -51,6 +51,10 @@ static float prFxSlopeTension=0.0f;
 static int   prLastNote=96;
 static int   prPaintNote=-1;
 static int   prQuantize=1;
+static int   prScaleRoot=0;
+static int   prScaleType=0;
+static int   prDragSelStartR=-1;
+static int   prDragSelStartN=-1;
 static const char* const PR_NOTE_LBL[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 
 struct PrClipEntry { int rowOff; short note; short ins; short vol; };
@@ -81,6 +85,26 @@ static ImU32 prChanColor(int chan, int alpha) {
 
 static bool prIsSpecial(short v) {
   return v==DIV_NOTE_OFF||v==DIV_NOTE_REL||v==DIV_MACRO_REL;
+}
+
+static const int PR_SCALE_IV[2][7]={{0,2,4,5,7,9,11},{0,2,3,5,7,8,10}};
+
+static int prSnapScale(int note) {
+  if (prScaleType==0) return note;
+  const int* iv=PR_SCALE_IV[prScaleType-1];
+  int best=note, bestDist=127;
+  for (int delta=-11;delta<=11;delta++) {
+    int cand=note+delta;
+    if (cand<0||cand>=180) continue;
+    int rel=((cand%12)-prScaleRoot+12)%12;
+    for (int i=0;i<7;i++) {
+      if (iv[i]==rel) {
+        int d=abs(delta);
+        if (d<bestDist) { bestDist=d; best=cand; }
+      }
+    }
+  }
+  return best;
 }
 
 static float prFxCurve(float t, float tension) {
@@ -145,6 +169,32 @@ void FurnaceGUI::drawPianoRoll() {
     if (ImGui::RadioButton("/4##q4",prQuantize==4))   prQuantize=4; ImGui::SameLine();
     if (ImGui::RadioButton("/8##q8",prQuantize==8))   prQuantize=8; ImGui::SameLine();
     if (ImGui::RadioButton("/16##q16",prQuantize==16)) prQuantize=16;
+    ImGui::Separator();
+    ImGui::Text("Scale Snap:");
+    {
+      static const char* typeNames[]={"Off","Major","Minor"};
+      ImGui::SetNextItemWidth(80*dpiScale);
+      if (ImGui::BeginCombo("##scType",typeNames[prScaleType])) {
+        for (int i=0;i<3;i++) {
+          if (ImGui::Selectable(typeNames[i],prScaleType==i)) prScaleType=i;
+          if (prScaleType==i) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+      if (prScaleType>0) {
+        ImGui::SameLine();
+        static const char* rootNames[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+        ImGui::SetNextItemWidth(60*dpiScale);
+        if (ImGui::BeginCombo("##scRoot",rootNames[prScaleRoot])) {
+          for (int i=0;i<12;i++) {
+            bool sel=(prScaleRoot==i);
+            if (ImGui::Selectable(rootNames[i],sel)) prScaleRoot=i;
+            if (sel) ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+      }
+    }
     ImGui::EndPopup();
   }
 
@@ -601,7 +651,7 @@ void FurnaceGUI::drawPianoRoll() {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
           if (prPianoHeld!=mnote) {
             if (prPianoHeld>=0) e->noteOff(prChan);
-            e->noteOn(prChan,prevIns>=0?prevIns:0,mnote);
+            e->noteOn(prChan,curIns>=0?curIns:(prevIns>=0?prevIns:0),mnote-60);
             prPianoHeld=mnote;
           }
         }
@@ -646,6 +696,7 @@ void FurnaceGUI::drawPianoRoll() {
             prepareUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=true;
           } else if (midHeld) {
             prSelecting=true;
+            prDragSelStartR=mrow; prDragSelStartN=mnote;
             prSelR0=prSelR1=mrow; prSelN0=prSelN1=mnote;
             prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
           } else {
@@ -673,11 +724,12 @@ void FurnaceGUI::drawPianoRoll() {
           ImGui::OpenPopup("##prCtx");
 
         if (prPainting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-          int pn=(prPaintNote>=0)?prPaintNote:mnote;
+          int pn=prSnapScale((prPaintNote>=0)?prPaintNote:mnote);
           pat->newData[mrow][DIV_PAT_NOTE]=(short)pn;
           prLastNote=pn;
-          if (pat->newData[mrow][DIV_PAT_INS]==-1&&prevIns>=0)
-            pat->newData[mrow][DIV_PAT_INS]=(short)prevIns;
+          int insToUse=(curIns>=0)?curIns:(prevIns>=0?prevIns:-1);
+          if (pat->newData[mrow][DIV_PAT_INS]==-1&&insToUse>=0)
+            pat->newData[mrow][DIV_PAT_INS]=(short)insToUse;
           if (pat->newData[mrow][DIV_PAT_VOL]==-1)
             pat->newData[mrow][DIV_PAT_VOL]=(short)volMax;
           MARK_MODIFIED;
@@ -698,6 +750,16 @@ void FurnaceGUI::drawPianoRoll() {
 
         if (prSelecting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
           prSelR1=mrow; prSelN1=mnote;
+          if (prDragSelStartR>=0) {
+            int dr0=ImMin(prDragSelStartR,mrow), dr1=ImMax(prDragSelStartR,mrow);
+            int dn0=ImMin(prDragSelStartN,mnote), dn1=ImMax(prDragSelStartN,mnote);
+            float sx0=ox+pianoW+dr0*rowW;
+            float sx1=ox+pianoW+(dr1+1)*rowW;
+            float sy0=oy+(NOTES-1-dn1)*noteH;
+            float sy1=oy+(NOTES-1-dn0+1)*noteH;
+            dl->AddRectFilled(ImVec2(sx0,sy0),ImVec2(sx1,sy1),IM_COL32(100,160,255,30));
+            dl->AddRect(ImVec2(sx0,sy0),ImVec2(sx1,sy1),IM_COL32(100,160,255,180),0.0f,0,1.5f);
+          }
         }
 
         float hcx=ox+pianoW+mrow*rowW;
@@ -720,6 +782,7 @@ void FurnaceGUI::drawPianoRoll() {
           prSelecting=false;
           prSelRow0=ImMin(prSelR0,prSelR1); prSelRow1=ImMax(prSelR0,prSelR1);
           prSelN0  =ImMin(prSelN0,prSelN1); prSelN1  =ImMax(prSelN0,prSelN1);
+          prDragSelStartR=-1; prDragSelStartN=-1;
         }
         prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1;
         if (prPianoHeld>=0&&!hov) { e->noteOff(prChan); prPianoHeld=-1; }
@@ -737,19 +800,22 @@ void FurnaceGUI::drawPianoRoll() {
     }
 
     if (ImGui::BeginPopup("##prCtx")) {
-      ImVec2 mp=ImGui::GetMousePos();
-      float lx=mp.x-wp.x+prSyncScrollX;
-      float ly=mp.y-wp.y+scrollY;
-      int mr=ImClamp((int)((lx-pianoW)/rowW),0,patLen-1);
-      int mn=ImClamp(NOTES-1-(int)(ly/noteH),0,NOTES-1);
-      ImGui::Text("Row %d  |  %s",mr,noteNames[mn]);
+      ImVec2 mp2=ImGui::GetMousePos();
+      float lx2=mp2.x-wp.x+prSyncScrollX;
+      float ly2=mp2.y-wp.y+scrollY;
+      int mr=ImClamp((int)((lx2-pianoW)/rowW),0,patLen-1);
+      int mn=ImClamp(NOTES-1-(int)(ly2/noteH),0,NOTES-1);
+      bool onNote=(pat->newData[mr][DIV_PAT_NOTE]>=0&&!prIsSpecial(pat->newData[mr][DIV_PAT_NOTE]));
+      ImGui::TextDisabled("Row %d  |  %s",mr,noteNames[mn]);
       ImGui::Separator();
       if (ImGui::MenuItem("Note On")) {
         prepareUndo(GUI_UNDO_PATTERN_EDIT);
-        pat->newData[mr][DIV_PAT_NOTE]=(short)mn;
-        if (pat->newData[mr][DIV_PAT_INS]==-1&&prevIns>=0) pat->newData[mr][DIV_PAT_INS]=(short)prevIns;
+        int pn=prSnapScale(mn);
+        pat->newData[mr][DIV_PAT_NOTE]=(short)pn;
+        int insToUse2=(curIns>=0)?curIns:(prevIns>=0?prevIns:-1);
+        if (pat->newData[mr][DIV_PAT_INS]==-1&&insToUse2>=0) pat->newData[mr][DIV_PAT_INS]=(short)insToUse2;
         if (pat->newData[mr][DIV_PAT_VOL]==-1) pat->newData[mr][DIV_PAT_VOL]=(short)volMax;
-        prLastNote=mn;
+        prLastNote=pn;
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
       }
       if (ImGui::MenuItem("Note Off")) {
@@ -757,15 +823,104 @@ void FurnaceGUI::drawPianoRoll() {
         pat->newData[mr][DIV_PAT_NOTE]=DIV_NOTE_OFF;
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
       }
-      if (ImGui::MenuItem("Note Release (===)")) {
+      if (ImGui::MenuItem("Note Release")) {
         prepareUndo(GUI_UNDO_PATTERN_EDIT);
         pat->newData[mr][DIV_PAT_NOTE]=DIV_NOTE_REL;
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
       }
-      if (ImGui::MenuItem("Macro Release (REL)")) {
+      if (ImGui::MenuItem("Macro Release")) {
         prepareUndo(GUI_UNDO_PATTERN_EDIT);
         pat->newData[mr][DIV_PAT_NOTE]=DIV_MACRO_REL;
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Set Instrument",nullptr,false,onNote||(hasSel&&selR0>=0))) {
+        prepareUndo(GUI_UNDO_PATTERN_EDIT);
+        int insToSet=(curIns>=0)?curIns:0;
+        if (hasSel) {
+          for (int r=selR0;r<=selR1;r++) {
+            short nv=pat->newData[r][DIV_PAT_NOTE];
+            if (nv>=0&&nv<NOTES&&!prIsSpecial(nv)) pat->newData[r][DIV_PAT_INS]=(short)insToSet;
+          }
+        } else if (onNote) {
+          pat->newData[mr][DIV_PAT_INS]=(short)insToSet;
+        }
+        makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+      }
+      ImGui::Separator();
+      if (hasSel&&ImGui::BeginMenu("Transpose")) {
+        if (ImGui::MenuItem("+1 semitone")) {
+          prepareUndo(GUI_UNDO_PATTERN_EDIT);
+          for (int r=selR0;r<=selR1;r++) {
+            short nv=pat->newData[r][DIV_PAT_NOTE];
+            if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv+1<NOTES)
+              pat->newData[r][DIV_PAT_NOTE]=nv+1;
+          }
+          prSelN0=ImClamp(prSelN0+1,0,NOTES-1); prSelN1=ImClamp(prSelN1+1,0,NOTES-1);
+          makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+        }
+        if (ImGui::MenuItem("-1 semitone")) {
+          prepareUndo(GUI_UNDO_PATTERN_EDIT);
+          for (int r=selR0;r<=selR1;r++) {
+            short nv=pat->newData[r][DIV_PAT_NOTE];
+            if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv-1>=0)
+              pat->newData[r][DIV_PAT_NOTE]=nv-1;
+          }
+          prSelN0=ImClamp(prSelN0-1,0,NOTES-1); prSelN1=ImClamp(prSelN1-1,0,NOTES-1);
+          makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+        }
+        if (ImGui::MenuItem("+1 octave")) {
+          prepareUndo(GUI_UNDO_PATTERN_EDIT);
+          for (int r=selR0;r<=selR1;r++) {
+            short nv=pat->newData[r][DIV_PAT_NOTE];
+            if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv+12<NOTES)
+              pat->newData[r][DIV_PAT_NOTE]=nv+12;
+          }
+          prSelN0=ImClamp(prSelN0+12,0,NOTES-1); prSelN1=ImClamp(prSelN1+12,0,NOTES-1);
+          makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+        }
+        if (ImGui::MenuItem("-1 octave")) {
+          prepareUndo(GUI_UNDO_PATTERN_EDIT);
+          for (int r=selR0;r<=selR1;r++) {
+            short nv=pat->newData[r][DIV_PAT_NOTE];
+            if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv-12>=0)
+              pat->newData[r][DIV_PAT_NOTE]=nv-12;
+          }
+          prSelN0=ImClamp(prSelN0-12,0,NOTES-1); prSelN1=ImClamp(prSelN1-12,0,NOTES-1);
+          makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::Separator();
+      if (hasSel&&ImGui::MenuItem("Copy Selection")) {
+        prClipboard.clear();
+        prClipRows=selR1-selR0+1;
+        for (int r=selR0;r<=selR1;r++) {
+          short nv=pat->newData[r][DIV_PAT_NOTE];
+          if (nv>=0&&nv<NOTES&&nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)) {
+            PrClipEntry ce;
+            ce.rowOff=r-selR0; ce.note=nv;
+            ce.ins=pat->newData[r][DIV_PAT_INS];
+            ce.vol=pat->newData[r][DIV_PAT_VOL];
+            prClipboard.push_back(ce);
+          }
+        }
+      }
+      if (!prClipboard.empty()&&ImGui::MenuItem("Paste")) {
+        prepareUndo(GUI_UNDO_PATTERN_EDIT);
+        int baseRow=cursor.y;
+        for (auto& ce:prClipboard) {
+          int r=baseRow+ce.rowOff;
+          if (r>=0&&r<patLen) {
+            pat->newData[r][DIV_PAT_NOTE]=ce.note;
+            if (ce.ins>=0) pat->newData[r][DIV_PAT_INS]=ce.ins;
+            if (ce.vol>=0) pat->newData[r][DIV_PAT_VOL]=ce.vol;
+          }
+        }
+        makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+      }
+      if (ImGui::MenuItem("Select All")) {
+        prSelRow0=0; prSelRow1=patLen-1; prSelN0=0; prSelN1=NOTES-1;
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Erase Note")) {
@@ -793,6 +948,16 @@ void FurnaceGUI::drawPianoRoll() {
         for (int r=selR0;r<=selR1;r++)
           for (int n=selN0;n<=selN1;n++)
             if (pat->newData[r][DIV_PAT_NOTE]==n) pat->newData[r][DIV_PAT_NOTE]=-1;
+        makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+        prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
+      }
+      if (hasSel&&ImGui::MenuItem("Erase Row Data")) {
+        prepareUndo(GUI_UNDO_PATTERN_EDIT);
+        for (int r=selR0;r<=selR1;r++) {
+          short nv=pat->newData[r][DIV_PAT_NOTE];
+          if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv))
+            for (int col=0;col<DIV_MAX_COLS;col++) pat->newData[r][col]=-1;
+        }
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
         prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
       }
