@@ -158,6 +158,35 @@ void FurnaceGUI::drawPianoRoll() {
   ImGui::Checkbox("Follow##prFollow",&prFollow);
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scroll to follow playhead");
   ImGui::SameLine();
+  ImGui::Separator();
+  ImGui::SameLine();
+  {
+    static const char* scaleTypeNames[]={"Scale: Off","Major","Minor"};
+    static const char* rootNames[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    ImGui::SetNextItemWidth(90*dpiScale);
+    if (ImGui::BeginCombo("##scType",scaleTypeNames[prScaleType])) {
+      for (int i=0;i<3;i++) {
+        if (ImGui::Selectable(scaleTypeNames[i],prScaleType==i)) prScaleType=i;
+        if (prScaleType==i) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale snap");
+    if (prScaleType>0) {
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(52*dpiScale);
+      if (ImGui::BeginCombo("##scRoot",rootNames[prScaleRoot])) {
+        for (int i=0;i<12;i++) {
+          bool sel=(prScaleRoot==i);
+          if (ImGui::Selectable(rootNames[i],sel)) prScaleRoot=i;
+          if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale root note");
+    }
+  }
+  ImGui::SameLine();
   if (ImGui::Button("View\xef\x83\x83##prView")) ImGui::OpenPopup("prViewMenu");
   if (ImGui::BeginPopup("prViewMenu")) {
     ImGui::Checkbox("Pitch Slides##pvPS",&prShowPitchSlide);
@@ -169,32 +198,6 @@ void FurnaceGUI::drawPianoRoll() {
     if (ImGui::RadioButton("/4##q4",prQuantize==4))   prQuantize=4; ImGui::SameLine();
     if (ImGui::RadioButton("/8##q8",prQuantize==8))   prQuantize=8; ImGui::SameLine();
     if (ImGui::RadioButton("/16##q16",prQuantize==16)) prQuantize=16;
-    ImGui::Separator();
-    ImGui::Text("Scale Snap:");
-    {
-      static const char* typeNames[]={"Off","Major","Minor"};
-      ImGui::SetNextItemWidth(80*dpiScale);
-      if (ImGui::BeginCombo("##scType",typeNames[prScaleType])) {
-        for (int i=0;i<3;i++) {
-          if (ImGui::Selectable(typeNames[i],prScaleType==i)) prScaleType=i;
-          if (prScaleType==i) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-      }
-      if (prScaleType>0) {
-        ImGui::SameLine();
-        static const char* rootNames[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
-        ImGui::SetNextItemWidth(60*dpiScale);
-        if (ImGui::BeginCombo("##scRoot",rootNames[prScaleRoot])) {
-          for (int i=0;i<12;i++) {
-            bool sel=(prScaleRoot==i);
-            if (ImGui::Selectable(rootNames[i],sel)) prScaleRoot=i;
-            if (sel) ImGui::SetItemDefaultFocus();
-          }
-          ImGui::EndCombo();
-        }
-      }
-    }
     ImGui::EndPopup();
   }
 
