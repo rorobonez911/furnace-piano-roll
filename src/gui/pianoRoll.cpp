@@ -24,6 +24,7 @@
 #include <fmt/printf.h>
 #include <string.h>
 #include <math.h>
+#include <vector>
 
 static const bool PR_BLACK_KEY[12]={false,true,false,true,false,false,true,false,true,false,true,false};
 
@@ -40,14 +41,21 @@ static bool  prSelecting=false;
 static int   prSelR0=-1,prSelR1=-1,prSelN0=-1,prSelN1=-1;
 static bool  prFxUndoOpen=false;
 static bool  prNoteUndoOpen=false;
-static float  prPanDX=0.0f, prPanDY=0.0f;
-static int    prPianoHeld=-1;
-static int    prFxLastDragRow=-1;
-static bool   prFxSlopeActive=false;
-static int    prFxSlopeR0=-1, prFxSlopeR1=-1;
-static int    prFxSlopeV0=0,  prFxSlopeV1=0;
-static float  prFxSlopeTension=0.0f;
+static float prPanDX=0.0f, prPanDY=0.0f;
+static int   prPianoHeld=-1;
+static int   prFxLastDragRow=-1;
+static bool  prFxSlopeActive=false;
+static int   prFxSlopeR0=-1, prFxSlopeR1=-1;
+static int   prFxSlopeV0=0,  prFxSlopeV1=0;
+static float prFxSlopeTension=0.0f;
+static int   prLastNote=96;
+static int   prPaintNote=-1;
+static int   prQuantize=1;
 static const char* const PR_NOTE_LBL[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+
+struct PrClipEntry { int rowOff; short note; short ins; short vol; };
+static std::vector<PrClipEntry> prClipboard;
+static int prClipRows=0;
 
 static ImU32 prColorMulAlpha(ImVec4 c,float a) {
   return IM_COL32((int)(c.x*255),(int)(c.y*255),(int)(c.z*255),(int)(c.w*a*255));
@@ -120,7 +128,7 @@ void FurnaceGUI::drawPianoRoll() {
   ImGui::SetNextItemWidth(70*dpiScale);
   ImGui::SliderFloat("H##prH",&prNoteH,4.0f,20.0f,"%.0f");
   ImGui::SameLine();
-  ImGui::Checkbox("Show All Channels##prAC",&prShowAllChans);
+  ImGui::Checkbox("Show All##prAC",&prShowAllChans);
   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show all channels as ghost notes");
   ImGui::SameLine();
   ImGui::Checkbox("Follow##prFollow",&prFollow);
@@ -130,6 +138,13 @@ void FurnaceGUI::drawPianoRoll() {
   if (ImGui::BeginPopup("prViewMenu")) {
     ImGui::Checkbox("Pitch Slides##pvPS",&prShowPitchSlide);
     ImGui::Checkbox("Volume Bars##pvVB",&prShowVolBars);
+    ImGui::Separator();
+    ImGui::Text("Quantize:");
+    if (ImGui::RadioButton("Off##qOff",prQuantize==1)) prQuantize=1; ImGui::SameLine();
+    if (ImGui::RadioButton("/2##q2",prQuantize==2))   prQuantize=2; ImGui::SameLine();
+    if (ImGui::RadioButton("/4##q4",prQuantize==4))   prQuantize=4; ImGui::SameLine();
+    if (ImGui::RadioButton("/8##q8",prQuantize==8))   prQuantize=8; ImGui::SameLine();
+    if (ImGui::RadioButton("/16##q16",prQuantize==16)) prQuantize=16;
     ImGui::EndPopup();
   }
 
@@ -165,12 +180,10 @@ void FurnaceGUI::drawPianoRoll() {
 
   const float totalW=(float)patLen*rowW;
 
-  // selection bounds
   int selR0=ImMin(prSelRow0,prSelRow1), selR1=ImMax(prSelRow0,prSelRow1);
   int selN0=ImMin(prSelN0,prSelN1),    selN1=ImMax(prSelN0,prSelN1);
   bool hasSel=(prSelRow0>=0&&prSelRow1>=0&&prSelN0>=0&&prSelN1>=0);
 
-  // theme colors
   ImU32 cBg      =ImGui::ColorConvertFloat4ToU32(uiColors[GUI_COLOR_PIANO_ROLL_BG]);
   ImU32 cKeyW    =ImGui::ColorConvertFloat4ToU32(uiColors[GUI_COLOR_PIANO_ROLL_KEY_WHITE]);
   ImU32 cKeyB    =ImGui::ColorConvertFloat4ToU32(uiColors[GUI_COLOR_PIANO_ROLL_KEY_BLACK]);
@@ -210,7 +223,6 @@ void FurnaceGUI::drawPianoRoll() {
       int lblStep=1;
       while (lblStep*rowW<maxLblW&&lblStep<patLen) lblStep++;
       if (lblStep>1&&hiA>1) lblStep=((lblStep+hiA-1)/hiA)*hiA;
-
       for (int r=0;r<patLen;r++) {
         float rx=ox+pianoW+r*rowW;
         if (rx+rowW<vx0||rx>vx1) continue;
@@ -227,7 +239,8 @@ void FurnaceGUI::drawPianoRoll() {
     float cxl=ox+pianoW+cursor.y*rowW;
     dl->AddRectFilled(ImVec2(cxl,twp.y),ImVec2(cxl+2,twp.y+timelineH),IM_COL32(255,255,100,200));
     {
-      const char* ordStr=fmt::sprintf("ORD %02X",ord).c_str();
+      String ordStrS=fmt::sprintf("ORD %02X",ord);
+      const char* ordStr=ordStrS.c_str();
       ImVec2 osz=ImGui::CalcTextSize(ordStr);
       float ox2=twp.x+4, oy2=twp.y+2;
       dl->AddRectFilled(ImVec2(ox2-1,oy2-1),ImVec2(ox2+osz.x+2,oy2+osz.y+1),
@@ -313,6 +326,15 @@ void FurnaceGUI::drawPianoRoll() {
       else               dl->AddLine(ImVec2(cx,oy),ImVec2(cx,oy+totalH),cGridFaint);
     }
 
+    if (prQuantize>1) {
+      int qstep=ImMax(patLen/prQuantize,1);
+      for (int r=0;r<=patLen;r+=qstep) {
+        float cx=ox+pianoW+r*rowW;
+        if (cx<vx0-rowW||cx>vx1+rowW) continue;
+        dl->AddLine(ImVec2(cx,oy),ImVec2(cx,oy+totalH),IM_COL32(255,220,80,40),2.0f);
+      }
+    }
+
     {
       float bx0=ox+pianoW;
       float bx1=ox+pianoW+totalW;
@@ -320,7 +342,6 @@ void FurnaceGUI::drawPianoRoll() {
       dl->AddLine(ImVec2(bx1,oy),ImVec2(bx1,oy+totalH),IM_COL32(0,0,0,90),2.0f);
     }
 
-    // selection rect
     if (hasSel) {
       float sx0=ox+pianoW+selR0*rowW,   sx1=ox+pianoW+(selR1+1)*rowW;
       float sy0=oy+(NOTES-1-selN1)*noteH,sy1=oy+(NOTES-selN0)*noteH;
@@ -399,7 +420,7 @@ void FurnaceGUI::drawPianoRoll() {
         if (ins>=0) snprintf(lbl,sizeof(lbl),"%s i%02X",noteNames[nv],(unsigned)ins);
         else        snprintf(lbl,sizeof(lbl),"%s",noteNames[nv]);
         ImVec2 tsz=ImGui::CalcTextSize(lbl);
-        if (tsz.x>lw && ins>=0) {
+        if (tsz.x>lw&&ins>=0) {
           snprintf(lbl,sizeof(lbl),"%s",noteNames[nv]);
           tsz=ImGui::CalcTextSize(lbl);
         }
@@ -412,8 +433,8 @@ void FurnaceGUI::drawPianoRoll() {
 
       if (prShowVolBars) {
         short vol=pat->newData[r][DIV_PAT_VOL];
-        if (vol>=0) {
-          float vf=(float)vol/(float)volMax;
+        if (vol>=0&&volMax>0) {
+          float vf=ImClamp((float)vol/(float)volMax,0.0f,1.0f);
           float bh=ImMax((ny1-ny0)*0.18f,2.0f*(float)dpiScale);
           float bw=(nx1-nx0)*vf;
           dl->AddRectFilled(ImVec2(nx0,ny1-bh),ImVec2(nx0+bw,ny1),
@@ -435,7 +456,7 @@ void FurnaceGUI::drawPianoRoll() {
           if (fx==0x01||fx==0xE1) slideUp=true;
           else if (fx==0x02||fx==0xE2) slideDown=true;
           else if (fx==0x03) {
-            for (int rr=r+1;rr<patLen&&rr<r+128;rr++) {
+            for (int rr=r+1;rr<patLen&&rr<r+256;rr++) {
               short nn=pat->newData[rr][DIV_PAT_NOTE];
               if (nn>=0&&nn<NOTES&&!prIsSpecial(nn)) { portaTargetNote=nn; portaTargetRow=rr; break; }
               if (prIsSpecial(nn)) break;
@@ -465,7 +486,7 @@ void FurnaceGUI::drawPianoRoll() {
           dl->PopClipRect();
         } else {
           int targetNote=-1;
-          for (int rr=r+1;rr<patLen&&rr<r+128;rr++) {
+          for (int rr=r+1;rr<patLen&&rr<r+256;rr++) {
             short nn=pat->newData[rr][DIV_PAT_NOTE];
             if (nn>=0&&nn<NOTES&&!prIsSpecial(nn)) { targetNote=nn; break; }
             if (prIsSpecial(nn)) break;
@@ -474,14 +495,14 @@ void FurnaceGUI::drawPianoRoll() {
           if (targetNote>=0)
             toY=oy+(NOTES-1-targetNote)*noteH+noteH*0.5f;
           else
-            toY=midY+(slideUp?-noteH*2.0f:noteH*2.0f);
-          dl->PushClipRect(ImVec2(nx0,noteTop),ImVec2(nx1,noteBot),true);
-          dl->AddLine(ImVec2(nx0,midY),ImVec2(nx1,toY),slideCol,2.0f);
+            toY=midY+(slideUp?-noteH*20.0f:noteH*20.0f);
+          float cly0=oy, cly1=oy+totalH;
+          dl->PushClipRect(ImVec2(nx0,cly0),ImVec2(nx1,cly1),true);
+          dl->AddLine(ImVec2(nx0+(nx1-nx0)*0.5f,midY),ImVec2(nx1,toY),slideCol,2.0f);
           dl->PopClipRect();
         }
       }
     }
-
 
     if (e->isPlaying()&&playOrder==ord) {
       float phx=ox+pianoW+oldRow*rowW;
@@ -551,6 +572,7 @@ void FurnaceGUI::drawPianoRoll() {
     ImGui::SetCursorPos(ImVec2(0,0));
     ImGui::InvisibleButton("##prInteract",ImVec2(pianoW+totalW,totalH));
     bool hov=ImGui::IsItemHovered();
+    bool midHeld=ImGui::IsMouseDown(ImGuiMouseButton_Middle);
 
     if (hov) {
       ImVec2 mp=ImGui::GetMousePos();
@@ -558,9 +580,17 @@ void FurnaceGUI::drawPianoRoll() {
       float ly=mp.y-wp.y+scrollY;
       bool inPiano=(mp.x-wp.x<pianoW);
       int mrow=(!inPiano)?(int)((lx-pianoW)/rowW):-1;
-      int mnote=(int)(NOTES-1-(int)(ly/noteH));
+      int mnote=ImClamp(NOTES-1-(int)(ly/noteH),0,NOTES-1);
 
-      if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+      if (prQuantize>1&&mrow>=0) {
+        int qstep=ImMax(patLen/prQuantize,1);
+        mrow=(mrow/qstep)*qstep;
+        mrow=ImClamp(mrow,0,patLen-1);
+      } else if (mrow>=0) {
+        mrow=ImClamp(mrow,0,patLen-1);
+      }
+
+      if (midHeld&&!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         ImVec2 delta=ImGui::GetIO().MouseDelta;
         prPanDX-=delta.x;
         prPanDY-=delta.y;
@@ -585,7 +615,7 @@ void FurnaceGUI::drawPianoRoll() {
         e->noteOff(prChan); prPianoHeld=-1;
       }
 
-      if (!inPiano&&mrow>=0&&mrow<patLen&&mnote>=0&&mnote<NOTES) {
+      if (!inPiano&&mrow>=0&&mrow<patLen) {
         bool nearEdge=false;
         if (!prSelecting&&!prPainting&&!prErasing&&!prResizing) {
           short ev=pat->newData[mrow][DIV_PAT_NOTE];
@@ -614,13 +644,28 @@ void FurnaceGUI::drawPianoRoll() {
           if (nearEdge) {
             prResizing=true;
             prepareUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=true;
-          } else if (ImGui::GetIO().KeyCtrl) {
+          } else if (midHeld) {
             prSelecting=true;
             prSelR0=prSelR1=mrow; prSelN0=prSelN1=mnote;
             prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
           } else {
             prPainting=true; prErasing=false;
             prSelRow0=prSelRow1=-1; prSelN0=prSelN1=-1;
+            int defNote=mnote;
+            if (pat->newData[mrow][DIV_PAT_NOTE]==-1) {
+              if (ord>0) {
+                int prevPatIdx=e->curSubSong->orders.ord[prChan][ord-1];
+                DivPattern* prevPat=e->curPat[prChan].getPattern(prevPatIdx,false);
+                if (prevPat) {
+                  for (int rr=mrow;rr>=0;rr--) {
+                    short pn=prevPat->newData[rr][DIV_PAT_NOTE];
+                    if (pn>=0&&pn<NOTES&&!prIsSpecial(pn)) { defNote=pn; break; }
+                  }
+                }
+              }
+              if (defNote==mnote&&prLastNote>=0&&prLastNote<NOTES) defNote=prLastNote;
+            }
+            prPaintNote=defNote;
             prepareUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=true;
           }
         }
@@ -628,7 +673,9 @@ void FurnaceGUI::drawPianoRoll() {
           ImGui::OpenPopup("##prCtx");
 
         if (prPainting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-          pat->newData[mrow][DIV_PAT_NOTE]=(short)mnote;
+          int pn=(prPaintNote>=0)?prPaintNote:mnote;
+          pat->newData[mrow][DIV_PAT_NOTE]=(short)pn;
+          prLastNote=pn;
           if (pat->newData[mrow][DIV_PAT_INS]==-1&&prevIns>=0)
             pat->newData[mrow][DIV_PAT_INS]=(short)prevIns;
           if (pat->newData[mrow][DIV_PAT_VOL]==-1)
@@ -653,13 +700,12 @@ void FurnaceGUI::drawPianoRoll() {
           prSelR1=mrow; prSelN1=mnote;
         }
 
-        // hover cell highlight
         float hcx=ox+pianoW+mrow*rowW;
         float hcy=oy+(NOTES-1-mnote)*noteH;
         dl->AddRectFilled(ImVec2(hcx,hcy),ImVec2(hcx+rowW,hcy+noteH),IM_COL32(255,255,255,28));
 
         if (!ImGui::IsPopupOpen("##prCtx")) {
-          if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+          if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)&&!prPainting&&!prResizing)
             { prErasing=true; prepareUndo(GUI_UNDO_PATTERN_EDIT); }
           if (prErasing&&ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
             for (int col=0;col<DIV_MAX_COLS;col++) pat->newData[mrow][col]=-1;
@@ -675,22 +721,21 @@ void FurnaceGUI::drawPianoRoll() {
           prSelRow0=ImMin(prSelR0,prSelR1); prSelRow1=ImMax(prSelR0,prSelR1);
           prSelN0  =ImMin(prSelN0,prSelN1); prSelN1  =ImMax(prSelN0,prSelN1);
         }
-        prPainting=prResizing=false; prResizeRow=-1;
-        if (prPianoHeld>=0&&!inPiano) { e->noteOff(prChan); prPianoHeld=-1; }
+        prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1;
+        if (prPianoHeld>=0&&!hov) { e->noteOff(prChan); prPianoHeld=-1; }
       }
       if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)&&prErasing)
         { makeUndo(GUI_UNDO_PATTERN_EDIT); prErasing=false; }
     } else {
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (prNoteUndoOpen) { makeUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=false; }
-        prPainting=prResizing=prSelecting=false; prResizeRow=-1;
+        prPainting=prResizing=prSelecting=false; prResizeRow=-1; prPaintNote=-1;
         if (prPianoHeld>=0) { e->noteOff(prChan); prPianoHeld=-1; }
       }
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)&&prErasing)
         { makeUndo(GUI_UNDO_PATTERN_EDIT); prErasing=false; }
     }
 
-    // context menu
     if (ImGui::BeginPopup("##prCtx")) {
       ImVec2 mp=ImGui::GetMousePos();
       float lx=mp.x-wp.x+prSyncScrollX;
@@ -704,6 +749,7 @@ void FurnaceGUI::drawPianoRoll() {
         pat->newData[mr][DIV_PAT_NOTE]=(short)mn;
         if (pat->newData[mr][DIV_PAT_INS]==-1&&prevIns>=0) pat->newData[mr][DIV_PAT_INS]=(short)prevIns;
         if (pat->newData[mr][DIV_PAT_VOL]==-1) pat->newData[mr][DIV_PAT_VOL]=(short)volMax;
+        prLastNote=mn;
         makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
       }
       if (ImGui::MenuItem("Note Off")) {
@@ -724,11 +770,9 @@ void FurnaceGUI::drawPianoRoll() {
       ImGui::Separator();
       if (ImGui::MenuItem("Erase Note")) {
         prepareUndo(GUI_UNDO_PATTERN_EDIT);
-        // find where this note actually started (we might be anywhere in its span)
         int noteStart=mr;
         short sv=pat->newData[mr][DIV_PAT_NOTE];
         if (sv==-1||sv==DIV_NOTE_OFF) {
-          // scan back to find the note start
           for (int rr=mr-1;rr>=0;rr--) {
             short bv=pat->newData[rr][DIV_PAT_NOTE];
             if (bv==-1||bv==DIV_NOTE_OFF) continue;
@@ -736,9 +780,7 @@ void FurnaceGUI::drawPianoRoll() {
             break;
           }
         }
-        // wipe all columns on the start row
         for (int col=0;col<DIV_MAX_COLS;col++) pat->newData[noteStart][col]=-1;
-        // remove the note-off that terminates this note
         for (int rr=noteStart+1;rr<patLen;rr++) {
           short nv2=pat->newData[rr][DIV_PAT_NOTE];
           if (nv2==DIV_NOTE_OFF) { pat->newData[rr][DIV_PAT_NOTE]=-1; break; }
@@ -757,10 +799,64 @@ void FurnaceGUI::drawPianoRoll() {
       ImGui::EndPopup();
     }
 
-    // keyboard shortcuts
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
       if (ImGui::IsKeyPressed(ImGuiKey_A,false)&&ImGui::GetIO().KeyCtrl)
         { prSelRow0=0; prSelRow1=patLen-1; prSelN0=0; prSelN1=NOTES-1; }
+
+      if (ImGui::IsKeyPressed(ImGuiKey_C,false)&&ImGui::GetIO().KeyCtrl&&hasSel) {
+        prClipboard.clear();
+        prClipRows=selR1-selR0+1;
+        for (int r=selR0;r<=selR1;r++) {
+          short nv=pat->newData[r][DIV_PAT_NOTE];
+          if (nv>=0&&nv<NOTES&&nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)) {
+            PrClipEntry ce;
+            ce.rowOff=r-selR0; ce.note=nv;
+            ce.ins=pat->newData[r][DIV_PAT_INS];
+            ce.vol=pat->newData[r][DIV_PAT_VOL];
+            prClipboard.push_back(ce);
+          }
+        }
+      }
+
+      if (ImGui::IsKeyPressed(ImGuiKey_V,false)&&ImGui::GetIO().KeyCtrl&&!prClipboard.empty()) {
+        prepareUndo(GUI_UNDO_PATTERN_EDIT);
+        int baseRow=cursor.y;
+        for (auto& ce:prClipboard) {
+          int r=baseRow+ce.rowOff;
+          if (r>=0&&r<patLen) {
+            pat->newData[r][DIV_PAT_NOTE]=ce.note;
+            if (ce.ins>=0) pat->newData[r][DIV_PAT_INS]=ce.ins;
+            else if (prevIns>=0) pat->newData[r][DIV_PAT_INS]=(short)prevIns;
+            if (ce.vol>=0) pat->newData[r][DIV_PAT_VOL]=ce.vol;
+            else pat->newData[r][DIV_PAT_VOL]=(short)volMax;
+          }
+        }
+        makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+      }
+
+      if (hasSel) {
+        int tDir=0;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow,false)&&ImGui::GetIO().KeyShift)
+          tDir=ImGui::GetIO().KeyCtrl?12:1;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow,false)&&ImGui::GetIO().KeyShift)
+          tDir=ImGui::GetIO().KeyCtrl?-12:-1;
+        if (tDir!=0) {
+          int ns0=selN0+tDir, ns1=selN1+tDir;
+          if (ns0>=0&&ns1<NOTES) {
+            prepareUndo(GUI_UNDO_PATTERN_EDIT);
+            for (int r=selR0;r<=selR1;r++) {
+              short nv=pat->newData[r][DIV_PAT_NOTE];
+              if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)) {
+                int nn=nv+tDir;
+                if (nn>=0&&nn<NOTES) pat->newData[r][DIV_PAT_NOTE]=(short)nn;
+              }
+            }
+            prSelN0=ns0; prSelN1=ns1;
+            makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
+          }
+        }
+      }
+
       if (ImGui::IsKeyPressed(ImGuiKey_Delete,false)&&hasSel) {
         prepareUndo(GUI_UNDO_PATTERN_EDIT);
         for (int r=selR0;r<=selR1;r++)
@@ -773,7 +869,7 @@ void FurnaceGUI::drawPianoRoll() {
     }
   }
   ImGui::EndChild();
-  ImGui::PopStyleVar(); // restore ScrollbarSize
+  ImGui::PopStyleVar();
 
   {
     ImGui::InvisibleButton("##prSplit",ImVec2(noteAreaW,splitterH));
@@ -824,7 +920,6 @@ void FurnaceGUI::drawPianoRoll() {
     snprintf(dynNames[1+ei*2+1],64,"FX%d Val",ei+1);
   }
 
-  // short names for the closed-state combo button
   char shortNames[9][16];
   snprintf(shortNames[0],16,"Vol");
   for (int ei=0;ei<ImMin(effectCols,4);ei++) {
@@ -874,7 +969,7 @@ void FurnaceGUI::drawPianoRoll() {
       ImGui::SetScrollX(ImGui::GetScrollX()+prPanDX);
       prPanDX=0;
     }
-    prSyncScrollX=ImGui::GetScrollX(); // read back so note grid/timeline sync next frame
+    prSyncScrollX=ImGui::GetScrollX();
     float fxSX=prSyncScrollX;
     ImDrawList* dl=ImGui::GetWindowDrawList();
     ImVec2 wp2=ImGui::GetWindowPos();
@@ -907,7 +1002,7 @@ void FurnaceGUI::drawPianoRoll() {
       float bx0=ox2+pianoW+r*rowW+1;
       float bx1=ox2+pianoW+(r+1)*rowW-1;
       if (bx1<vx0||bx0>vx1) continue;
-      float norm=(laneMax>0)?(float)cv/laneMax:0.0f;
+      float norm=(laneMax>0)?(float)cv/(float)laneMax:0.0f;
       float bh=ImMax(norm*lH,2.0f);
       float by0=lBot-bh;
       dl->AddRectFilled(ImVec2(bx0,by0),ImVec2(bx1,lBot),laneBarColor,1.5f);
@@ -933,7 +1028,6 @@ void FurnaceGUI::drawPianoRoll() {
       dl->AddLine(ImVec2(phx,wp2.y),ImVec2(phx,wp2.y+effectLaneH),cHead,2.0f);
     }
 
-    // left label panel
     dl->AddRectFilled(wp2,ImVec2(wp2.x+pianoW,wp2.y+effectLaneH),
       prColorMulAlpha(uiColors[GUI_COLOR_PIANO_ROLL_BG],1.25f));
     char topLbl[16],btmLbl[8];
@@ -951,7 +1045,6 @@ void FurnaceGUI::drawPianoRoll() {
     dl->PopClipRect();
     dl->AddLine(ImVec2(wp2.x+pianoW,wp2.y),ImVec2(wp2.x+pianoW,wp2.y+effectLaneH),cKeyBrd,1.5f);
 
-    // slope tool preview (drawn before invisible button so it appears under cursor)
     if (prFxSlopeActive&&prFxSlopeR0>=0&&prFxSlopeR1>=0) {
       int sr0=ImMin(prFxSlopeR0,prFxSlopeR1), sr1=ImMax(prFxSlopeR0,prFxSlopeR1);
       int sv0=(prFxSlopeR0<=prFxSlopeR1)?prFxSlopeV0:prFxSlopeV1;
@@ -976,17 +1069,15 @@ void FurnaceGUI::drawPianoRoll() {
     ImGui::InvisibleButton("##prFXClick",ImVec2(pianoW+totalW,effectLaneH));
     bool fxHov=ImGui::IsItemHovered();
 
-    // get mouse info regardless of hover (needed during slope drag)
     ImVec2 fxMp=ImGui::GetMousePos();
     float fxLx=fxMp.x-wp2.x+fxSX;
     float fxLy=fxMp.y-wp2.y;
     int fxRow=ImClamp((int)((fxLx-pianoW)/rowW),0,patLen-1);
-    float fxNorm=ImClamp(1.0f-(fxLy-2)/lH,0.0f,1.0f);
+    float fxNorm=ImClamp(1.0f-(fxLy-lTop+wp2.y)/lH,0.0f,1.0f);
     int fxPv=(int)(fxNorm*(float)laneMax+0.5f);
 
     if (fxHov||prFxSlopeActive) {
       if (!prFxSlopeActive) {
-        // hover crosshair + tooltip
         float pvy=lBot-((float)fxPv/ImMax(laneMax,1))*lH;
         dl->AddLine(ImVec2(ox2+pianoW,pvy),ImVec2(ox2+pianoW+totalW,pvy),
           IM_COL32(255,255,100,110),1.0f);
@@ -1012,8 +1103,13 @@ void FurnaceGUI::drawPianoRoll() {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)&&prFxUndoOpen) {
           int r0=(prFxLastDragRow>=0)?ImMin(prFxLastDragRow,fxRow):fxRow;
           int r1=(prFxLastDragRow>=0)?ImMax(prFxLastDragRow,fxRow):fxRow;
+          int vStart=(prFxLastDragRow>=0&&prFxLastDragRow!=fxRow)
+            ?((int)(pat->newData[r0][laneCol]))
+            :fxPv;
           for (int rr=r0;rr<=r1;rr++) {
-            pat->newData[rr][laneCol]=(short)fxPv;
+            float t=(r1>r0)?(float)(rr-r0)/(r1-r0):0.0f;
+            short vv=(short)ImClamp((int)(vStart+(fxPv-vStart)*t+0.5f),0,laneMax);
+            pat->newData[rr][laneCol]=vv;
             if (!isEffNum&&prEffectLane>0&&pat->newData[rr][DIV_PAT_FX(laneEffIdx)]==-1)
               pat->newData[rr][DIV_PAT_FX(laneEffIdx)]=0;
           }
@@ -1033,12 +1129,9 @@ void FurnaceGUI::drawPianoRoll() {
         prFxSlopeTension=0.0f;
       }
       if (prFxSlopeActive) {
-        // update end point
         prFxSlopeR1=fxRow; prFxSlopeV1=fxPv;
-        // mouse wheel adjusts tension
         float wheel=ImGui::GetIO().MouseWheel;
         if (wheel!=0) prFxSlopeTension=ImClamp(prFxSlopeTension+wheel*0.2f,-3.0f,3.0f);
-        // apply curve to pattern in real-time
         if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
           int sr0=ImMin(prFxSlopeR0,prFxSlopeR1), sr1=ImMax(prFxSlopeR0,prFxSlopeR1);
           int sv0=(prFxSlopeR0<=prFxSlopeR1)?prFxSlopeV0:prFxSlopeV1;
