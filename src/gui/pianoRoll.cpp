@@ -55,11 +55,68 @@ static int   prScaleRoot=0;
 static int   prScaleType=0;
 static int   prDragSelStartR=-1;
 static int   prDragSelStartN=-1;
+static int   prChanEnd=-1;
+static bool  prPolyEnabled=false;
+static int   prPaintHeld=-1;
+static int   prPaintChan=-1;
 static const char* const PR_NOTE_LBL[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 
 struct PrClipEntry { int rowOff; short note; short ins; short vol; };
 static std::vector<PrClipEntry> prClipboard;
 static int prClipRows=0;
+
+struct PrPolyGroup { int from, to; };
+static std::vector<PrPolyGroup> prPolyGroups;
+static int prNewGrpFrom=0;
+static int prNewGrpTo=0;
+
+static void prPolySerialize(DivSong* s) {
+  String& n=s->notes;
+  size_t p=n.find("\n<!-- jfpoly:");
+  if (p!=String::npos) n=n.substr(0,p);
+  if (prPolyGroups.empty()) return;
+  n+="\n<!-- jfpoly:";
+  for (int i=0;i<(int)prPolyGroups.size();i++) {
+    if (i) n+=",";
+    n+=fmt::sprintf("%d-%d",prPolyGroups[i].from,prPolyGroups[i].to);
+  }
+  n+=" -->";
+}
+
+static String prPolyMarkerCache;
+
+static String prPolyExtractMarker(const String& notes) {
+  size_t p=notes.find("\n<!-- jfpoly:");
+  if (p==String::npos) return "";
+  size_t e2=notes.find("-->",p);
+  if (e2==String::npos) return "";
+  return notes.substr(p,e2+3-p);
+}
+
+static void prPolyDeserialize(DivSong* s) {
+  prPolyGroups.clear();
+  const String& n=s->notes;
+  size_t p=n.find("\n<!-- jfpoly:");
+  if (p==String::npos) return;
+  size_t e2=n.find("-->",p);
+  if (e2==String::npos) return;
+  String data=n.substr(p+13,e2-(p+13));
+  data.erase(data.find_last_not_of(" \t")+1);
+  const char* c=data.c_str();
+  while (*c) {
+    int a=-1,b=-1;
+    if (sscanf(c,"%d-%d",&a,&b)==2&&a>=0&&b>=a) {
+      prPolyGroups.push_back({a,b});
+    }
+    while (*c&&*c!=',') c++;
+    if (*c==',') c++;
+  }
+}
+
+static void prPolyCommit(DivSong* s) {
+  prPolySerialize(s);
+  prPolyMarkerCache=prPolyExtractMarker(s->notes);
+}
 
 static ImU32 prColorMulAlpha(ImVec4 c,float a) {
   return IM_COL32((int)(c.x*255),(int)(c.y*255),(int)(c.z*255),(int)(c.w*a*255));
@@ -128,71 +185,340 @@ void FurnaceGUI::drawPianoRoll() {
   int totalChans=e->getTotalChannelCount();
   if (totalChans<=0) { ImGui::Text("No channels."); ImGui::End(); return; }
   if (prChan<0||prChan>=totalChans) prChan=0;
+  if (prChanEnd<prChan||prChanEnd>=totalChans) prChanEnd=prChan;
+  if (prPolyEnabled&&prChanEnd<=prChan) prPolyEnabled=false;
 
-  ImGui::Text("Ch:"); ImGui::SameLine();
-  ImGui::SetNextItemWidth(150*dpiScale);
-  if (ImGui::BeginCombo("##prCh",fmt::sprintf("%d: %s",prChan+1,e->getChannelName(prChan)).c_str())) {
-    for (int i=0;i<totalChans;i++) {
-      bool s=(i==prChan);
-      if (ImGui::Selectable(fmt::sprintf("%d: %s",i+1,e->getChannelName(i)).c_str(),s)) {
-        prChan=i; prSelRow0=prSelRow1=-1;
-      }
-      if (s) ImGui::SetItemDefaultFocus();
+  {
+    String curMarker=prPolyExtractMarker(e->song.notes);
+    if (curMarker!=prPolyMarkerCache) {
+      prPolyMarkerCache=curMarker;
+      prPolyDeserialize(&e->song);
+      prPolyEnabled=false;
     }
-    ImGui::EndCombo();
   }
-  if (ImGui::IsItemHovered()) {
-    int dw=-(int)ImGui::GetIO().MouseWheel;
-    if (dw) { prChan=ImClamp(prChan+dw,0,totalChans-1); prSelRow0=prSelRow1=-1; }
+
+  {
+    String chBtnLbl=fmt::sprintf("Ch %d: %s###prChBtn",prChan+1,e->getChannelName(prChan));
+    if (ImGui::Button(chBtnLbl.c_str())) ImGui::OpenPopup("##prChPop");
+    if (ImGui::IsItemHovered()) {
+      int dw=-(int)ImGui::GetIO().MouseWheel;
+      if (dw) { prChan=ImClamp(prChan+dw,0,totalChans-1); prChanEnd=prChan; prPolyEnabled=false; prSelRow0=prSelRow1=-1; }
+      ImGui::SetTooltip("Active channel\nClick to pick  |  Scroll to change");
+    }
+    ImGui::SameLine();
   }
-  ImGui::SameLine();
+
+  {
+    bool polyHasGrps=!prPolyGroups.empty();
+    if (prPolyEnabled) ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.12f,0.38f,0.68f,0.9f));
+    else if (polyHasGrps) ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.18f,0.25f,0.38f,0.8f));
+    String polyLbl=prPolyEnabled
+      ?fmt::sprintf("Poly: Ch%d-%d###prPolyBtn",prChan+1,prChanEnd+1)
+      :"Poly###prPolyBtn";
+    if (ImGui::Button(polyLbl.c_str())) ImGui::OpenPopup("##prPolyPop");
+    if (prPolyEnabled||polyHasGrps) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+      if (prPolyEnabled) ImGui::SetTooltip("Polyphony ON: Ch%d-Ch%d\nClick to manage groups",prChan+1,prChanEnd+1);
+      else if (polyHasGrps) ImGui::SetTooltip("%d poly group(s) defined\nClick to manage",(int)prPolyGroups.size());
+      else ImGui::SetTooltip("Polyphonic multi-channel editing\nClick to set up groups");
+    }
+    ImGui::SameLine();
+  }
+
+  if (ImGui::BeginPopup("##prChPop")) {
+    static const ImVec4 chTypeCol[6]={
+      ImVec4(0.95f,0.75f,0.15f,1.0f),
+      ImVec4(0.25f,0.65f,1.0f, 1.0f),
+      ImVec4(0.90f,0.35f,0.25f,1.0f),
+      ImVec4(0.25f,0.85f,0.45f,1.0f),
+      ImVec4(0.70f,0.35f,0.90f,1.0f),
+      ImVec4(0.75f,0.95f,0.25f,1.0f),
+    };
+    static const char* chTypeName[6]={"FM","Pulse","Noise","Wave","PCM","OP"};
+
+    auto isBound=[&](int ch)->int {
+      for (int gi=0;gi<(int)prPolyGroups.size();gi++)
+        if (ch>=prPolyGroups[gi].from&&ch<=prPolyGroups[gi].to) return gi;
+      return -1;
+    };
+
+    float btnSz=ImMax(26.0f*(float)dpiScale,ImGui::GetFrameHeight()*1.2f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(3.0f*(float)dpiScale,3.0f*(float)dpiScale));
+    int prevChip=-1;
+    int inRow=0;
+    const int chPerRow=12;
+
+    for (int ch=0;ch<totalChans;ch++) {
+      int boundGi=isBound(ch);
+      int chip=e->song.dispatchOfChan[ch];
+      if (chip!=prevChip) {
+        if (prevChip>=0) ImGui::NewLine();
+        inRow=0;
+        DivSystem sys=e->song.sysOfChan[ch];
+        ImGui::TextColored(ImVec4(0.55f,0.78f,1.0f,0.9f),"%s",e->getSystemName(sys));
+        prevChip=chip;
+      } else if (inRow>0&&inRow%chPerRow==0) {
+        ImGui::NewLine();
+      } else {
+        ImGui::SameLine(0,3.0f*(float)dpiScale);
+      }
+
+      int ct=ImClamp(e->getChannelType(ch),0,5);
+      ImVec4 col=chTypeCol[ct];
+      bool isSel=(ch==prChan&&!prPolyEnabled);
+      bool inGrp=(boundGi>=0);
+
+      float br=isSel?col.x*0.65f:(inGrp?col.x*0.2f:col.x*0.22f);
+      float bg=isSel?col.y*0.65f:(inGrp?col.y*0.2f:col.y*0.22f);
+      float bb=isSel?col.z*0.65f:(inGrp?col.z*0.2f:col.z*0.22f);
+      float ba=inGrp?0.4f:0.85f;
+      ImGui::PushStyleColor(ImGuiCol_Button,    ImVec4(br,bg,bb,ba));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(ImMin(br+0.2f,1.0f),ImMin(bg+0.2f,1.0f),ImMin(bb+0.2f,1.0f),1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(ImMin(br+0.35f,1.0f),ImMin(bg+0.35f,1.0f),ImMin(bb+0.35f,1.0f),1.0f));
+
+      const char* sn=e->getChannelShortName(ch);
+      bool clicked=ImGui::Button(fmt::sprintf("%s##cb%d",sn?sn:"?",ch).c_str(),ImVec2(btnSz,btnSz));
+      ImGui::PopStyleColor(3);
+
+      if (isSel) {
+        ImVec2 rm=ImGui::GetItemRectMin(), rx=ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRect(rm,rx,IM_COL32(100,185,255,255),2.0f*(float)dpiScale,0,2.0f);
+      }
+      if (ImGui::IsItemHovered()) {
+        if (inGrp) ImGui::SetTooltip("Ch %d: %s  [%s]\nIn poly group %d",ch+1,e->getChannelName(ch),chTypeName[ct],boundGi+1);
+        else       ImGui::SetTooltip("Ch %d: %s  [%s]",ch+1,e->getChannelName(ch),chTypeName[ct]);
+      }
+      if (clicked) {
+        prChan=ch; prChanEnd=ch; prPolyEnabled=false;
+        prSelRow0=prSelRow1=-1;
+        ImGui::CloseCurrentPopup();
+      }
+      inRow++;
+    }
+    ImGui::PopStyleVar();
+    ImGui::NewLine();
+    ImGui::Separator();
+    ImGui::TextDisabled("  ");
+    for (int i=0;i<6;i++) {
+      ImGui::SameLine(0,5.0f*(float)dpiScale);
+      ImGui::TextColored(chTypeCol[i],"\xe2\x97\x8f %s",chTypeName[i]);
+    }
+    ImGui::EndPopup();
+  }
+
+  if (ImGui::BeginPopup("##prPolyPop")) {
+    static const ImVec4 chTypeCol2[6]={
+      ImVec4(0.95f,0.75f,0.15f,1.0f),
+      ImVec4(0.25f,0.65f,1.0f, 1.0f),
+      ImVec4(0.90f,0.35f,0.25f,1.0f),
+      ImVec4(0.25f,0.85f,0.45f,1.0f),
+      ImVec4(0.70f,0.35f,0.90f,1.0f),
+      ImVec4(0.75f,0.95f,0.25f,1.0f),
+    };
+    static const char* chTypeName2[6]={"FM","Pulse","Noise","Wave","PCM","OP"};
+
+    auto isBound2=[&](int ch)->int {
+      for (int gi=0;gi<(int)prPolyGroups.size();gi++)
+        if (ch>=prPolyGroups[gi].from&&ch<=prPolyGroups[gi].to) return gi;
+      return -1;
+    };
+
+    float btnSz=ImMax(26.0f*(float)dpiScale,ImGui::GetFrameHeight()*1.2f);
+    float popW=ImMax(320.0f*(float)dpiScale,ImGui::GetContentRegionAvail().x);
+    ImGui::Dummy(ImVec2(popW,0));
+
+    ImGui::TextColored(ImVec4(0.55f,0.78f,1.0f,1.0f),"Polyphonic Groups");
+    ImGui::SameLine();
+    ImGui::TextDisabled(" — notes spread across voices in a group");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (prPolyGroups.empty()) {
+      ImGui::TextDisabled("No groups. Add one below.");
+      ImGui::Spacing();
+    } else {
+      int toRemove=-1;
+      for (int gi=0;gi<(int)prPolyGroups.size();gi++) {
+        PrPolyGroup& g=prPolyGroups[gi];
+        bool isActive=(prChan==g.from&&prChanEnd==g.to&&prPolyEnabled);
+        ImGui::PushID(gi);
+
+        if (isActive) {
+          ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.1f,0.42f,0.75f,0.9f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.15f,0.52f,0.88f,1.0f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.2f,0.6f,1.0f,1.0f));
+        } else {
+          ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.15f,0.2f,0.28f,0.8f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.22f,0.32f,0.45f,1.0f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.28f,0.42f,0.6f,1.0f));
+        }
+        bool activate=ImGui::Button(isActive?"\xe2\x96\xba ON##act":"\xe2\x96\xba##act",ImVec2(isActive?50.0f*(float)dpiScale:32.0f*(float)dpiScale,btnSz));
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(isActive?"Poly active on this group\nClick to deactivate":"Click to activate this group for polyphony");
+        if (activate) {
+          if (isActive) { prPolyEnabled=false; }
+          else { prChan=g.from; prChanEnd=g.to; prPolyEnabled=true; prSelRow0=prSelRow1=-1; }
+        }
+
+        ImGui::SameLine(0,4.0f*(float)dpiScale);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(2.0f*(float)dpiScale,2.0f*(float)dpiScale));
+        for (int ch=g.from;ch<=g.to;ch++) {
+          int ct=ImClamp(e->getChannelType(ch),0,5);
+          ImVec4 col=chTypeCol2[ct];
+          ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(col.x*0.4f,col.y*0.4f,col.z*0.4f,0.9f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(col.x*0.6f,col.y*0.6f,col.z*0.6f,1.0f));
+          ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(col.x*0.75f,col.y*0.75f,col.z*0.75f,1.0f));
+          const char* sn=e->getChannelShortName(ch);
+          ImGui::Button(fmt::sprintf("%s##pgch%d",sn?sn:"?",ch).c_str(),ImVec2(btnSz,btnSz));
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ch %d: %s  [%s]",ch+1,e->getChannelName(ch),chTypeName2[ct]);
+          ImGui::PopStyleColor(3);
+          ImGui::SameLine(0,2.0f*(float)dpiScale);
+        }
+        ImGui::PopStyleVar();
+        ImGui::TextDisabled("(%d voices)",g.to-g.from+1);
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.4f,0.1f,0.1f,0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.7f,0.15f,0.15f,1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.85f,0.25f,0.25f,1.0f));
+        if (ImGui::SmallButton("Remove##rm")) toRemove=gi;
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove this poly group");
+        ImGui::PopID();
+        ImGui::Spacing();
+      }
+      if (toRemove>=0) {
+        if (prChan==prPolyGroups[toRemove].from&&prChanEnd==prPolyGroups[toRemove].to)
+          { prChanEnd=prChan; prPolyEnabled=false; }
+        prPolyGroups.erase(prPolyGroups.begin()+toRemove);
+        prPolyCommit(&e->song);
+      }
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.55f,0.78f,1.0f,0.85f),"New Group");
+    ImGui::Spacing();
+
+    if (prNewGrpFrom<0||prNewGrpFrom>=totalChans) prNewGrpFrom=0;
+    if (prNewGrpTo<prNewGrpFrom||prNewGrpTo>=totalChans) prNewGrpTo=prNewGrpFrom;
+
+    ImGui::Text("From:"); ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f*(float)dpiScale);
+    if (ImGui::BeginCombo("##ngFrom",fmt::sprintf("Ch %d: %s",prNewGrpFrom+1,e->getChannelName(prNewGrpFrom)).c_str())) {
+      for (int ch=0;ch<totalChans;ch++) {
+        if (ImGui::Selectable(fmt::sprintf("Ch %d: %s",ch+1,e->getChannelName(ch)).c_str(),ch==prNewGrpFrom)) {
+          prNewGrpFrom=ch; if (prNewGrpTo<prNewGrpFrom) prNewGrpTo=prNewGrpFrom;
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::Text("To:"); ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f*(float)dpiScale);
+    if (ImGui::BeginCombo("##ngTo",fmt::sprintf("Ch %d: %s",prNewGrpTo+1,e->getChannelName(prNewGrpTo)).c_str())) {
+      for (int ch=prNewGrpFrom;ch<totalChans;ch++) {
+        if (ImGui::Selectable(fmt::sprintf("Ch %d: %s",ch+1,e->getChannelName(ch)).c_str(),ch==prNewGrpTo))
+          prNewGrpTo=ch;
+      }
+      ImGui::EndCombo();
+    }
+
+    bool canAdd=(prNewGrpTo>prNewGrpFrom);
+    String addErr;
+    if (canAdd) {
+      int refChip=e->song.dispatchOfChan[prNewGrpFrom];
+      int refType=e->getChannelType(prNewGrpFrom);
+      for (int ch=prNewGrpFrom+1;ch<=prNewGrpTo&&canAdd;ch++) {
+        if (e->song.dispatchOfChan[ch]!=refChip) { canAdd=false; addErr="Channels span multiple chips"; }
+        else if (e->getChannelType(ch)!=refType) { canAdd=false; addErr="Mixed channel types (e.g. FM + noise)"; }
+        else if (isBound2(ch)>=0)                { canAdd=false; addErr=fmt::sprintf("Ch %d already in a group",ch+1); }
+      }
+      if (isBound2(prNewGrpFrom)>=0) { canAdd=false; addErr=fmt::sprintf("Ch %d already in a group",prNewGrpFrom+1); }
+    } else if (prNewGrpTo==prNewGrpFrom) {
+      addErr="Need at least 2 channels";
+    }
+
+    ImGui::Spacing();
+    if (!canAdd) {
+      ImGui::TextColored(ImVec4(0.9f,0.5f,0.3f,0.9f),"%s",addErr.empty()?"Select a range above":addErr.c_str());
+    } else {
+      int voices=prNewGrpTo-prNewGrpFrom+1;
+      int ct=ImClamp(e->getChannelType(prNewGrpFrom),0,5);
+      ImGui::TextColored(ImVec4(0.5f,0.9f,0.5f,0.9f),"%d %s voices: Ch%d - Ch%d",voices,chTypeName2[ct],prNewGrpFrom+1,prNewGrpTo+1);
+    }
+    ImGui::Spacing();
+
+    if (!canAdd) ImGui::BeginDisabled();
+    if (ImGui::Button("Add Group##prAddGrp")) {
+      PrPolyGroup ng={prNewGrpFrom,prNewGrpTo};
+      prPolyGroups.push_back(ng);
+      prChan=ng.from; prChanEnd=ng.to; prPolyEnabled=true;
+      prSelRow0=prSelRow1=-1;
+      prPolyCommit(&e->song);
+    }
+    if (ImGui::IsItemHovered()&&canAdd)
+      ImGui::SetTooltip("Add Ch%d-Ch%d as a poly group and activate it",prNewGrpFrom+1,prNewGrpTo+1);
+    if (!canAdd) ImGui::EndDisabled();
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Groups are saved automatically with the module.");
+
+    ImGui::EndPopup();
+  }
   ImGui::SetNextItemWidth(90*dpiScale);
   ImGui::SliderFloat("Zoom##prZ",&prZoom,0.25f,4.0f,"%.2fx");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Horizontal zoom (scroll in grid to zoom)\nRight-click to reset");
+  if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) prZoom=1.0f;
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70*dpiScale);
   ImGui::SliderFloat("H##prH",&prNoteH,4.0f,20.0f,"%.0f");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Note row height in pixels\nRight-click to reset");
+  if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) prNoteH=8.0f;
   ImGui::SameLine();
-  ImGui::Checkbox("Show All##prAC",&prShowAllChans);
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show all channels as ghost notes");
+  ImGui::Checkbox("All##prAC",&prShowAllChans);
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show all other channels as faint ghost notes");
   ImGui::SameLine();
   ImGui::Checkbox("Follow##prFollow",&prFollow);
-  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scroll to follow playhead");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Auto-scroll to follow the playhead during playback");
   ImGui::SameLine();
   ImGui::Separator();
   ImGui::SameLine();
   {
-    static const char* scaleTypeNames[]={"Scale: Off","Major","Minor"};
-    static const char* rootNames[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    static const char* scaleTypeNames2[]={"Scale: Off","Major","Minor"};
+    static const char* rootNames2[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     ImGui::SetNextItemWidth(90*dpiScale);
-    if (ImGui::BeginCombo("##scType",scaleTypeNames[prScaleType])) {
+    if (ImGui::BeginCombo("##scType",scaleTypeNames2[prScaleType])) {
       for (int i=0;i<3;i++) {
-        if (ImGui::Selectable(scaleTypeNames[i],prScaleType==i)) prScaleType=i;
+        if (ImGui::Selectable(scaleTypeNames2[i],prScaleType==i)) prScaleType=i;
         if (prScaleType==i) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale snap");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Snap placed notes to a musical scale\nOff = free placement");
     if (prScaleType>0) {
       ImGui::SameLine();
       ImGui::SetNextItemWidth(52*dpiScale);
-      if (ImGui::BeginCombo("##scRoot",rootNames[prScaleRoot])) {
+      if (ImGui::BeginCombo("##scRoot",rootNames2[prScaleRoot])) {
         for (int i=0;i<12;i++) {
           bool sel=(prScaleRoot==i);
-          if (ImGui::Selectable(rootNames[i],sel)) prScaleRoot=i;
+          if (ImGui::Selectable(rootNames2[i],sel)) prScaleRoot=i;
           if (sel) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
       }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale root note");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Root note of the selected scale");
     }
   }
   ImGui::SameLine();
   if (ImGui::Button("View\xef\x83\x83##prView")) ImGui::OpenPopup("prViewMenu");
+  if (ImGui::IsItemHovered()) ImGui::SetTooltip("Display and quantize options");
   if (ImGui::BeginPopup("prViewMenu")) {
     ImGui::Checkbox("Pitch Slides##pvPS",&prShowPitchSlide);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draw lines showing pitch slide effects (01/02/03)");
     ImGui::Checkbox("Volume Bars##pvVB",&prShowVolBars);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show volume as a bar at the bottom of each note");
     ImGui::Separator();
-    ImGui::Text("Quantize:");
+    ImGui::TextDisabled("Quantize: snap note placement to grid");
     if (ImGui::RadioButton("Off##qOff",prQuantize==1)) prQuantize=1; ImGui::SameLine();
     if (ImGui::RadioButton("/2##q2",prQuantize==2))   prQuantize=2; ImGui::SameLine();
     if (ImGui::RadioButton("/4##q4",prQuantize==4))   prQuantize=4; ImGui::SameLine();
@@ -404,7 +730,7 @@ void FurnaceGUI::drawPianoRoll() {
 
     if (prShowAllChans) {
       for (int ch=0;ch<totalChans;ch++) {
-        if (ch==prChan) continue;
+        if (prPolyEnabled&&ch>=prChan&&ch<=prChanEnd) continue;
         if (e->isChannelMuted(ch)) continue;
         int cpIdx=e->curSubSong->orders.ord[ch][ord];
         DivPattern* cp=e->curPat[ch].getPattern(cpIdx,false);
@@ -421,6 +747,30 @@ void FurnaceGUI::drawPianoRoll() {
           float ny1=ny0+noteH-2;
           if (nx1<vx0||nx0>vx1||ny1<vy0||ny0>vy1) continue;
           dl->AddRectFilledMultiColor(ImVec2(nx0,ny0),ImVec2(nx1,ny1),gTop,gTop,gBot,gBot);
+        }
+      }
+    }
+
+    if (prPolyEnabled&&prChanEnd>prChan) {
+      for (int ch=prChan+1;ch<=prChanEnd;ch++) {
+        if (e->isChannelMuted(ch)) continue;
+        int cpIdx=e->curSubSong->orders.ord[ch][ord];
+        DivPattern* cp=e->curPat[ch].getPattern(cpIdx,false);
+        if (!cp) continue;
+        ImU32 cTop=prChanColor(ch,200);
+        ImU32 cBot=prChanColor(ch,130);
+        ImU32 cBdr=prChanColor(ch,80);
+        for (int r=0;r<patLen;r++) {
+          short nv=cp->newData[r][DIV_PAT_NOTE];
+          if (nv<0||nv>=NOTES||prIsSpecial(nv)) continue;
+          int dur=prInferDuration(cp,r,patLen);
+          float nx0=ox+pianoW+r*rowW+1;
+          float ny0=oy+(NOTES-1-nv)*noteH+1;
+          float nx1=ox+pianoW+(r+dur)*rowW-1;
+          float ny1=ny0+noteH-2;
+          if (nx1<vx0||nx0>vx1||ny1<vy0||ny0>vy1) continue;
+          dl->AddRectFilledMultiColor(ImVec2(nx0,ny0),ImVec2(nx1,ny1),cTop,cTop,cBot,cBot);
+          dl->AddRect(ImVec2(nx0,ny0),ImVec2(nx1,ny1),cBdr,1.5f);
         }
       }
     }
@@ -701,7 +1051,7 @@ void FurnaceGUI::drawPianoRoll() {
             prSelecting=true;
             prDragSelStartR=mrow; prDragSelStartN=mnote;
             prSelR0=prSelR1=mrow; prSelN0=prSelN1=mnote;
-            prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
+            prSelRow0=mrow; prSelRow1=mrow;
           } else {
             prPainting=true; prErasing=false;
             prSelRow0=prSelRow1=-1; prSelN0=prSelN1=-1;
@@ -723,18 +1073,59 @@ void FurnaceGUI::drawPianoRoll() {
             prepareUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=true;
           }
         }
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)&&!prPainting&&!prResizing)
-          ImGui::OpenPopup("##prCtx");
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)&&!prPainting&&!prResizing) {
+          bool onSelNote=hasSel&&mrow>=selR0&&mrow<=selR1;
+          short noteHere=pat->newData[mrow][DIV_PAT_NOTE];
+          bool onNote=(noteHere>=0&&noteHere<NOTES&&!prIsSpecial(noteHere));
+          if (onSelNote||onNote) ImGui::OpenPopup("##prCtx");
+          else { prErasing=true; prepareUndo(GUI_UNDO_PATTERN_EDIT); }
+        }
 
         if (prPainting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
           int pn=prSnapScale((prPaintNote>=0)?prPaintNote:mnote);
-          pat->newData[mrow][DIV_PAT_NOTE]=(short)pn;
-          prLastNote=pn;
           int insToUse=(curIns>=0)?curIns:(prevIns>=0?prevIns:-1);
-          if (pat->newData[mrow][DIV_PAT_INS]==-1&&insToUse>=0)
-            pat->newData[mrow][DIV_PAT_INS]=(short)insToUse;
-          if (pat->newData[mrow][DIV_PAT_VOL]==-1)
-            pat->newData[mrow][DIV_PAT_VOL]=(short)volMax;
+          int paintCh=prChan;
+          if (prPolyEnabled&&prChanEnd>prChan) {
+            if (prPaintChan>=0) {
+              paintCh=prPaintChan;
+            } else {
+              for (int tc=prChan;tc<=prChanEnd;tc++) {
+                int tpIdx=e->curSubSong->orders.ord[tc][ord];
+                DivPattern* tp=e->curPat[tc].getPattern(tpIdx,true);
+                if (tp&&tp->newData[mrow][DIV_PAT_NOTE]==-1) { paintCh=tc; break; }
+              }
+              prPaintChan=paintCh;
+            }
+          }
+          int ppIdx=e->curSubSong->orders.ord[paintCh][ord];
+          DivPattern* pp=e->curPat[paintCh].getPattern(ppIdx,true);
+          if (pp) {
+            pp->newData[mrow][DIV_PAT_NOTE]=(short)pn;
+            prLastNote=pn;
+            if (pp->newData[mrow][DIV_PAT_INS]==-1&&insToUse>=0)
+              pp->newData[mrow][DIV_PAT_INS]=(short)insToUse;
+            if (pp->newData[mrow][DIV_PAT_VOL]==-1)
+              pp->newData[mrow][DIV_PAT_VOL]=(short)volMax;
+            if (prPolyEnabled&&prChanEnd>prChan) {
+              for (int tc=prChan;tc<=prChanEnd;tc++) {
+                if (tc==paintCh) continue;
+                int tpIdx2=e->curSubSong->orders.ord[tc][ord];
+                DivPattern* tp2=e->curPat[tc].getPattern(tpIdx2,true);
+                if (!tp2) continue;
+                if (pp->newData[mrow][DIV_PAT_VOL]>=0)
+                  tp2->newData[mrow][DIV_PAT_VOL]=pp->newData[mrow][DIV_PAT_VOL];
+                for (int ei=0;ei<effectCols;ei++) {
+                  tp2->newData[mrow][DIV_PAT_FX(ei)]=pp->newData[mrow][DIV_PAT_FX(ei)];
+                  tp2->newData[mrow][DIV_PAT_FXVAL(ei)]=pp->newData[mrow][DIV_PAT_FXVAL(ei)];
+                }
+              }
+            }
+          }
+          if (pn!=prPaintHeld) {
+            if (prPaintHeld>=0) e->noteOff(paintCh);
+            e->noteOn(paintCh,insToUse>=0?insToUse:0,pn-60);
+            prPaintHeld=pn;
+          }
           MARK_MODIFIED;
         }
 
@@ -745,7 +1136,7 @@ void FurnaceGUI::drawPianoRoll() {
               if (sv==-1||sv==DIV_NOTE_OFF) pat->newData[rr][DIV_PAT_NOTE]=-1;
               else break;
             }
-            if (mrow+1<patLen)
+            if (mrow+1<patLen && pat->newData[mrow+1][DIV_PAT_NOTE]==-1)
               pat->newData[mrow+1][DIV_PAT_NOTE]=DIV_NOTE_OFF;
           }
           MARK_MODIFIED;
@@ -754,14 +1145,10 @@ void FurnaceGUI::drawPianoRoll() {
         if (prSelecting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
           prSelR1=mrow; prSelN1=mnote;
           if (prDragSelStartR>=0) {
-            int dr0=ImMin(prDragSelStartR,mrow), dr1=ImMax(prDragSelStartR,mrow);
-            int dn0=ImMin(prDragSelStartN,mnote), dn1=ImMax(prDragSelStartN,mnote);
-            float sx0=ox+pianoW+dr0*rowW;
-            float sx1=ox+pianoW+(dr1+1)*rowW;
-            float sy0=oy+(NOTES-1-dn1)*noteH;
-            float sy1=oy+(NOTES-1-dn0+1)*noteH;
-            dl->AddRectFilled(ImVec2(sx0,sy0),ImVec2(sx1,sy1),IM_COL32(100,160,255,30));
-            dl->AddRect(ImVec2(sx0,sy0),ImVec2(sx1,sy1),IM_COL32(100,160,255,180),0.0f,0,1.5f);
+            prSelRow0=ImMin(prDragSelStartR,mrow);
+            prSelRow1=ImMax(prDragSelStartR,mrow);
+            prSelN0=ImMin(prDragSelStartN,mnote);
+            prSelN1=ImMax(prDragSelStartN,mnote);
           }
         }
 
@@ -769,13 +1156,9 @@ void FurnaceGUI::drawPianoRoll() {
         float hcy=oy+(NOTES-1-mnote)*noteH;
         dl->AddRectFilled(ImVec2(hcx,hcy),ImVec2(hcx+rowW,hcy+noteH),IM_COL32(255,255,255,28));
 
-        if (!ImGui::IsPopupOpen("##prCtx")) {
-          if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)&&!prPainting&&!prResizing)
-            { prErasing=true; prepareUndo(GUI_UNDO_PATTERN_EDIT); }
-          if (prErasing&&ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-            for (int col=0;col<DIV_MAX_COLS;col++) pat->newData[mrow][col]=-1;
-            MARK_MODIFIED;
-          }
+        if (prErasing&&ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+          for (int col=0;col<DIV_MAX_COLS;col++) pat->newData[mrow][col]=-1;
+          MARK_MODIFIED;
         }
       }
 
@@ -787,7 +1170,8 @@ void FurnaceGUI::drawPianoRoll() {
           prSelN0  =ImMin(prSelN0,prSelN1); prSelN1  =ImMax(prSelN0,prSelN1);
           prDragSelStartR=-1; prDragSelStartN=-1;
         }
-        prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1;
+        if (prPaintHeld>=0) { e->noteOff(prPaintChan>=0?prPaintChan:prChan); prPaintHeld=-1; }
+        prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1; prPaintChan=-1;
         if (prPianoHeld>=0&&!hov) { e->noteOff(prChan); prPianoHeld=-1; }
       }
       if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)&&prErasing)
@@ -795,7 +1179,8 @@ void FurnaceGUI::drawPianoRoll() {
     } else {
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (prNoteUndoOpen) { makeUndo(GUI_UNDO_PATTERN_EDIT); prNoteUndoOpen=false; }
-        prPainting=prResizing=prSelecting=false; prResizeRow=-1; prPaintNote=-1;
+        if (prPaintHeld>=0) { e->noteOff(prPaintChan>=0?prPaintChan:prChan); prPaintHeld=-1; }
+        prPainting=prResizing=prSelecting=false; prResizeRow=-1; prPaintNote=-1; prPaintChan=-1;
         if (prPianoHeld>=0) { e->noteOff(prChan); prPianoHeld=-1; }
       }
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)&&prErasing)
@@ -1035,7 +1420,79 @@ void FurnaceGUI::drawPianoRoll() {
       }
       if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) prSelRow0=prSelRow1=prSelN0=prSelN1=-1;
     }
+
+    {
+      float sz=16.0f*(float)dpiScale;
+      float gap=3.0f*(float)dpiScale;
+      float pad=4.0f*(float)dpiScale;
+      float rx=wp.x+noteAreaW-sz-pad;
+      float winH=ImGui::GetWindowHeight();
+      float wheel=ImGui::GetIO().MouseWheel;
+      ImDrawList* odl=ImGui::GetWindowDrawList();
+      ImU32 bgIdle=IM_COL32(20,20,20,180);
+      ImU32 bgHot =IM_COL32(55,95,55,230);
+      ImU32 arCol =IM_COL32(170,215,170,255);
+      float r=3.0f*(float)dpiScale;
+
+      auto drawArrow=[&](ImVec2 p, int dir, bool hov)->void{
+        odl->AddRectFilled(p,ImVec2(p.x+sz,p.y+sz),hov?bgHot:bgIdle,r);
+        float cx=p.x+sz*0.5f, cy=p.y+sz*0.5f;
+        float hw=sz*0.28f, hh=sz*0.22f;
+        switch(dir) {
+          case 0: odl->AddTriangleFilled(ImVec2(cx,cy-hh),ImVec2(cx-hw,cy+hh),ImVec2(cx+hw,cy+hh),arCol); break;
+          case 1: odl->AddTriangleFilled(ImVec2(cx,cy+hh),ImVec2(cx-hw,cy-hh),ImVec2(cx+hw,cy-hh),arCol); break;
+          case 2: odl->AddTriangleFilled(ImVec2(cx-hw,cy),ImVec2(cx+hh,cy-hh),ImVec2(cx+hh,cy+hh),arCol); break;
+          case 3: odl->AddTriangleFilled(ImVec2(cx+hw,cy),ImVec2(cx-hh,cy-hh),ImVec2(cx-hh,cy+hh),arCol); break;
+        }
+      };
+
+      ImVec2 hUpP(rx, wp.y+pad);
+      ImGui::SetCursorScreenPos(hUpP);
+      ImGui::InvisibleButton("##prHUp",ImVec2(sz,sz));
+      bool hUpHov=ImGui::IsItemHovered();
+      if (hUpHov) {
+        if (wheel!=0.0f) prNoteH=ImClamp(prNoteH+wheel,4.0f,20.0f);
+        if (ImGui::IsMouseClicked(0)) prNoteH=ImMin(prNoteH+1.0f,20.0f);
+        ImGui::SetTooltip("Row height: %.0f  (scroll or click)",prNoteH);
+      }
+      drawArrow(hUpP,0,hUpHov);
+
+      ImVec2 hDnP(rx, wp.y+pad+sz+gap);
+      ImGui::SetCursorScreenPos(hDnP);
+      ImGui::InvisibleButton("##prHDn",ImVec2(sz,sz));
+      bool hDnHov=ImGui::IsItemHovered();
+      if (hDnHov) {
+        if (wheel!=0.0f) prNoteH=ImClamp(prNoteH+wheel,4.0f,20.0f);
+        if (ImGui::IsMouseClicked(0)) prNoteH=ImMax(prNoteH-1.0f,4.0f);
+        ImGui::SetTooltip("Row height: %.0f  (scroll or click)",prNoteH);
+      }
+      drawArrow(hDnP,1,hDnHov);
+
+      float zBot=wp.y+winH-pad;
+      ImVec2 zInP(rx, zBot-sz);
+      ImGui::SetCursorScreenPos(zInP);
+      ImGui::InvisibleButton("##prZIn",ImVec2(sz,sz));
+      bool zInHov=ImGui::IsItemHovered();
+      if (zInHov) {
+        if (wheel!=0.0f) prZoom=ImClamp(prZoom+wheel*0.25f,0.25f,4.0f);
+        if (ImGui::IsMouseClicked(0)) prZoom=ImMin(prZoom+0.25f,4.0f);
+        ImGui::SetTooltip("Zoom: %.2fx  (scroll or click)",prZoom);
+      }
+      drawArrow(zInP,3,zInHov);
+
+      ImVec2 zOutP(rx, zBot-sz*2-gap);
+      ImGui::SetCursorScreenPos(zOutP);
+      ImGui::InvisibleButton("##prZOut",ImVec2(sz,sz));
+      bool zOutHov=ImGui::IsItemHovered();
+      if (zOutHov) {
+        if (wheel!=0.0f) prZoom=ImClamp(prZoom+wheel*0.25f,0.25f,4.0f);
+        if (ImGui::IsMouseClicked(0)) prZoom=ImMax(prZoom-0.25f,0.25f);
+        ImGui::SetTooltip("Zoom: %.2fx  (scroll or click)",prZoom);
+      }
+      drawArrow(zOutP,2,zOutHov);
+    }
   }
+
   ImGui::EndChild();
   ImGui::PopStyleVar();
 
