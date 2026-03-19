@@ -59,6 +59,8 @@ static int   prChanEnd=-1;
 static bool  prPolyEnabled=false;
 static int   prPaintHeld=-1;
 static int   prPaintChan=-1;
+static int   prPaintLen=1;
+static int   prPaintStartRow=-1;
 static const char* const PR_NOTE_LBL[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 
 struct PrClipEntry { int rowOff; short note; short ins; short vol; };
@@ -542,6 +544,9 @@ void FurnaceGUI::drawPianoRoll() {
   const float noteAreaW=availW;
   const float totalH=NOTES*noteH;
 
+  if (prFollow&&e->isPlaying()&&playOrder>=0&&playOrder<e->curSubSong->ordersLen)
+    curOrder=playOrder;
+
   int ord=curOrder;
   if (ord<0) ord=0;
   if (ord>=e->curSubSong->ordersLen) ord=e->curSubSong->ordersLen-1;
@@ -558,6 +563,12 @@ void FurnaceGUI::drawPianoRoll() {
   if (volMax<=0) volMax=0xff;
 
   const float totalW=(float)patLen*rowW;
+
+  int nextOrd=(ord+1<e->curSubSong->ordersLen)?(ord+1):ord;
+  bool hasNext=(nextOrd!=ord);
+  int nextPatIdx=hasNext?e->curSubSong->orders.ord[prChan][nextOrd]:patIdx;
+  DivPattern* nextPat=hasNext?e->curPat[prChan].getPattern(nextPatIdx,false):nullptr;
+  const float nextTotalW=hasNext?totalW:0.0f;
 
   int selR0=ImMin(prSelRow0,prSelRow1), selR1=ImMax(prSelRow0,prSelRow1);
   int selN0=ImMin(prSelN0,prSelN1),    selN1=ImMax(prSelN0,prSelN1);
@@ -576,13 +587,12 @@ void FurnaceGUI::drawPianoRoll() {
   int hiA=ImMax((int)e->curSubSong->hilightA,1);
   int hiB=ImMax((int)e->curSubSong->hilightB,1);
 
-  if (prFollow&&e->isPlaying()&&playOrder==ord) {
-    float playX=pianoW+oldRow*rowW;
-    float target=playX-noteAreaW*0.5f+pianoW*0.5f;
+  if (prFollow&&e->isPlaying()) {
+    float target=(pianoW+oldRow*rowW)-noteAreaW*0.5f+pianoW*0.5f;
     prSyncScrollX=ImMax(target,0.0f);
   }
 
-  ImGui::SetNextWindowContentSize(ImVec2(pianoW+totalW,timelineH));
+  ImGui::SetNextWindowContentSize(ImVec2(pianoW+totalW+nextTotalW,timelineH));
   if (ImGui::BeginChild("##prTL",ImVec2(noteAreaW,timelineH),false,
       ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
     if (settings.prFontScale!=1.0f) ImGui::SetWindowFontScale(settings.prFontScale);
@@ -626,9 +636,35 @@ void FurnaceGUI::drawPianoRoll() {
         prColorMulAlpha(uiColors[GUI_COLOR_PIANO_ROLL_BG],2.0f));
       dl->AddText(ImVec2(ox2,oy2),IM_COL32(200,200,200,230),ordStr);
     }
+    if (hasNext) {
+      float nx=ox+pianoW+totalW;
+      dl->AddLine(ImVec2(nx,twp.y),ImVec2(nx,twp.y+timelineH),IM_COL32(255,255,255,50),2.0f);
+      for (int r=0;r<patLen;r++) {
+        float rx=ox+pianoW+totalW+r*rowW;
+        if (rx+rowW<vx0||rx>vx1) continue;
+        ImU32 gc=(r%hiB==0)?cGridHi2:(r%hiA==0)?cGridHi1:cGrid;
+        ImU32 a=(gc>>24)&0xFF;
+        ImU32 gcFaint=(gc&0x00FFFFFF)|((ImU32)(a*0.35f)<<24);
+        dl->AddLine(ImVec2(rx,twp.y),ImVec2(rx,twp.y+timelineH),gcFaint);
+        if (r%((patLen/ImMax(patLen/4,1))==0?1:patLen/4)==0) {
+          dl->AddText(ImVec2(rx+2,twp.y+1),IM_COL32(120,120,120,120),fmt::sprintf("%d",r).c_str());
+        }
+      }
+      if (e->isPlaying()&&playOrder==nextOrd) {
+        float phx=ox+pianoW+totalW+oldRow*rowW;
+        dl->AddLine(ImVec2(phx,twp.y),ImVec2(phx,twp.y+timelineH),cHead,2.0f);
+      }
+      String nOrdStrS=fmt::sprintf("ORD %02X",nextOrd);
+      const char* nOrdStr=nOrdStrS.c_str();
+      ImVec2 nosz=ImGui::CalcTextSize(nOrdStr);
+      float nox2=ox+pianoW+totalW+4, noy2=twp.y+2;
+      dl->AddRectFilled(ImVec2(nox2-1,noy2-1),ImVec2(nox2+nosz.x+2,noy2+nosz.y+1),
+        prColorMulAlpha(uiColors[GUI_COLOR_PIANO_ROLL_BG],2.0f));
+      dl->AddText(ImVec2(nox2,noy2),IM_COL32(140,140,140,160),nOrdStr);
+    }
     dl->AddLine(ImVec2(twp.x,twp.y+timelineH-1),ImVec2(twp.x+noteAreaW,twp.y+timelineH-1),cKeyBrd);
     ImGui::SetCursorPos(ImVec2(0,0));
-    ImGui::InvisibleButton("##prSeek",ImVec2(pianoW+totalW,timelineH));
+    ImGui::InvisibleButton("##prSeek",ImVec2(pianoW+totalW+nextTotalW,timelineH));
     if (ImGui::IsItemHovered()) {
       float lx=ImGui::GetMousePos().x-twp.x+tlSX;
       if (lx>=pianoW) {
@@ -660,7 +696,7 @@ void FurnaceGUI::drawPianoRoll() {
   }
 
   ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,0.0f);
-  ImGui::SetNextWindowContentSize(ImVec2(pianoW+totalW,totalH));
+  ImGui::SetNextWindowContentSize(ImVec2(pianoW+totalW+nextTotalW,totalH));
   bool gridOpen=ImGui::BeginChild("##prGrid",ImVec2(noteAreaW,noteAreaH),false,
     ImGuiWindowFlags_HorizontalScrollbar);
 
@@ -719,6 +755,32 @@ void FurnaceGUI::drawPianoRoll() {
       float bx1=ox+pianoW+totalW;
       dl->AddLine(ImVec2(bx0,oy),ImVec2(bx0,oy+totalH),IM_COL32(0,0,0,90),2.0f);
       dl->AddLine(ImVec2(bx1,oy),ImVec2(bx1,oy+totalH),IM_COL32(0,0,0,90),2.0f);
+    }
+
+    if (hasNext) {
+      float nox0=ox+pianoW+totalW;
+      float nox1=ox+pianoW+totalW+nextTotalW;
+      for (int n=0;n<NOTES;n++) {
+        int dn=NOTES-1-n;
+        float ry0=oy+n*noteH,ry1=ry0+noteH;
+        if (ry1<vy0||ry0>vy1) continue;
+        bool blk=PR_BLACK_KEY[dn%12];
+        ImVec4 bgV=uiColors[GUI_COLOR_PIANO_ROLL_BG];
+        float dim=blk?0.55f:0.75f;
+        dl->AddRectFilled(ImVec2(nox0,ry0),ImVec2(nox1,ry1),
+          IM_COL32((int)(bgV.x*dim*255),(int)(bgV.y*dim*255),(int)(bgV.z*dim*255),255));
+        dl->AddLine(ImVec2(nox0,ry1),ImVec2(nox1,ry1),
+          (dn%12==0)?IM_COL32((cGridHi1>>0&0xFF),(cGridHi1>>8&0xFF),(cGridHi1>>16&0xFF),60):IM_COL32((cGrid>>0&0xFF),(cGrid>>8&0xFF),(cGrid>>16&0xFF),30));
+      }
+      for (int r=0;r<=patLen;r++) {
+        float cx=nox0+r*rowW;
+        if (cx<vx0-rowW||cx>vx1+rowW) continue;
+        if (r%hiB==0)      dl->AddLine(ImVec2(cx,oy),ImVec2(cx,oy+totalH),IM_COL32((cGridHi2>>0&0xFF),(cGridHi2>>8&0xFF),(cGridHi2>>16&0xFF),50));
+        else if (r%hiA==0) dl->AddLine(ImVec2(cx,oy),ImVec2(cx,oy+totalH),IM_COL32((cGridHi1>>0&0xFF),(cGridHi1>>8&0xFF),(cGridHi1>>16&0xFF),35));
+        else               dl->AddLine(ImVec2(cx,oy),ImVec2(cx,oy+totalH),IM_COL32((cGrid>>0&0xFF),(cGrid>>8&0xFF),(cGrid>>16&0xFF),15));
+      }
+      dl->AddLine(ImVec2(nox0,oy),ImVec2(nox0,oy+totalH),IM_COL32(255,255,255,60),2.0f);
+      dl->AddLine(ImVec2(nox1,oy),ImVec2(nox1,oy+totalH),IM_COL32(0,0,0,90),2.0f);
     }
 
     if (hasSel) {
@@ -907,8 +969,39 @@ void FurnaceGUI::drawPianoRoll() {
       }
     }
 
+    if (hasNext&&nextPat) {
+      ImVec4 cn4=uiColors[GUI_COLOR_PIANO_ROLL_NOTE];
+      for (int r=0;r<patLen;r++) {
+        short nv=nextPat->newData[r][DIV_PAT_NOTE];
+        if (nv==-1) continue;
+        float rx0=ox+pianoW+totalW+r*rowW;
+        if (prIsSpecial(nv)) {
+          if (rx0<vx0-rowW||rx0>vx1) continue;
+          ImU32 mc=IM_COL32(160,160,160,55);
+          dl->AddLine(ImVec2(rx0,oy),ImVec2(rx0,oy+totalH),mc,2.0f);
+          continue;
+        }
+        if (nv<0||nv>=NOTES) continue;
+        int dur=prInferDuration(nextPat,r,patLen);
+        float nx0=rx0+1;
+        float ny0=oy+(NOTES-1-nv)*noteH+1;
+        float nx1=ox+pianoW+totalW+(r+dur)*rowW-1;
+        float ny1=ny0+noteH-2;
+        if (nx1<vx0||nx0>vx1||ny1<vy0||ny0>vy1) continue;
+        float bf=0.65f+0.35f*((float)(nv/12)/14.0f);
+        ImU32 ncTop=IM_COL32((int)(ImMin(cn4.x*bf*1.18f,1.0f)*255),(int)(ImMin(cn4.y*bf*1.18f,1.0f)*255),(int)(ImMin(cn4.z*bf*1.18f,1.0f)*255),75);
+        ImU32 ncBot=IM_COL32((int)(ImMin(cn4.x*bf*0.72f,1.0f)*255),(int)(ImMin(cn4.y*bf*0.72f,1.0f)*255),(int)(ImMin(cn4.z*bf*0.72f,1.0f)*255),55);
+        dl->AddRectFilledMultiColor(ImVec2(nx0,ny0),ImVec2(nx1,ny1),ncTop,ncTop,ncBot,ncBot);
+        dl->AddRect(ImVec2(nx0,ny0),ImVec2(nx1,ny1),IM_COL32(255,255,255,28),1.5f);
+      }
+    }
+
     if (e->isPlaying()&&playOrder==ord) {
       float phx=ox+pianoW+oldRow*rowW;
+      dl->AddLine(ImVec2(phx,oy),ImVec2(phx,oy+totalH),cHead,2.0f);
+    }
+    if (hasNext&&e->isPlaying()&&playOrder==nextOrd) {
+      float phx=ox+pianoW+totalW+oldRow*rowW;
       dl->AddLine(ImVec2(phx,oy),ImVec2(phx,oy+totalH),cHead,2.0f);
     }
     {
@@ -973,7 +1066,7 @@ void FurnaceGUI::drawPianoRoll() {
     dl->AddLine(ImVec2(pkx+pianoW,oy),ImVec2(pkx+pianoW,oy+totalH),cKeyBrd,1.5f);
 
     ImGui::SetCursorPos(ImVec2(0,0));
-    ImGui::InvisibleButton("##prInteract",ImVec2(pianoW+totalW,totalH));
+    ImGui::InvisibleButton("##prInteract",ImVec2(pianoW+totalW+nextTotalW,totalH));
     bool hov=ImGui::IsItemHovered();
     bool midHeld=ImGui::IsMouseDown(ImGuiMouseButton_Middle);
 
@@ -1053,6 +1146,12 @@ void FurnaceGUI::drawPianoRoll() {
             prSelR0=prSelR1=mrow; prSelN0=prSelN1=mnote;
             prSelRow0=mrow; prSelRow1=mrow;
           } else {
+            {
+              short existNote=pat->newData[mrow][DIV_PAT_NOTE];
+              if (existNote>=0&&existNote<NOTES&&!prIsSpecial(existNote))
+                prPaintLen=prInferDuration(pat,mrow,patLen);
+            }
+            prPaintStartRow=mrow;
             prPainting=true; prErasing=false;
             prSelRow0=prSelRow1=-1; prSelN0=prSelN1=-1;
             int defNote=mnote;
@@ -1106,6 +1205,14 @@ void FurnaceGUI::drawPianoRoll() {
               pp->newData[mrow][DIV_PAT_INS]=(short)insToUse;
             if (pp->newData[mrow][DIV_PAT_VOL]==-1)
               pp->newData[mrow][DIV_PAT_VOL]=(short)volMax;
+            {
+              int noteEnd=mrow+prPaintLen;
+              for (int rr=mrow+1;rr<noteEnd&&rr<patLen;rr++)
+                if (pp->newData[rr][DIV_PAT_NOTE]==DIV_NOTE_OFF)
+                  pp->newData[rr][DIV_PAT_NOTE]=-1;
+              if (noteEnd<patLen&&(pp->newData[noteEnd][DIV_PAT_NOTE]==-1||pp->newData[noteEnd][DIV_PAT_NOTE]==DIV_NOTE_OFF))
+                pp->newData[noteEnd][DIV_PAT_NOTE]=DIV_NOTE_OFF;
+            }
             if (prPolyEnabled&&prChanEnd>prChan) {
               for (int tc=prChan;tc<=prChanEnd;tc++) {
                 if (tc==paintCh) continue;
@@ -1171,7 +1278,7 @@ void FurnaceGUI::drawPianoRoll() {
           prDragSelStartR=-1; prDragSelStartN=-1;
         }
         if (prPaintHeld>=0) { e->noteOff(prPaintChan>=0?prPaintChan:prChan); prPaintHeld=-1; }
-        prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1; prPaintChan=-1;
+        prPainting=prResizing=false; prResizeRow=-1; prPaintNote=-1; prPaintChan=-1; prPaintStartRow=-1;
         if (prPianoHeld>=0&&!hov) { e->noteOff(prChan); prPianoHeld=-1; }
       }
       if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)&&prErasing)
@@ -1517,7 +1624,9 @@ void FurnaceGUI::drawPianoRoll() {
   }
 
   char dynNames[9][64];
+  char shortNames[9][16];
   snprintf(dynNames[0],64,"Volume (0-%d)",volMax);
+  snprintf(shortNames[0],16,"Vol");
   for (int ei=0;ei<ImMin(effectCols,4);ei++) {
     int counts[256]={};
     for (int r=0;r<patLen;r++) {
@@ -1528,35 +1637,51 @@ void FurnaceGUI::drawPianoRoll() {
     for (int i=1;i<256;i++) if (counts[i]>maxCnt) { maxCnt=counts[i]; maxFx=i; }
     if (maxCnt>0) {
       const char* d=e->getEffectDesc((unsigned char)maxFx,prChan,false);
-      if (d&&strlen(d)>6) {
+      if (d&&d[0]) {
         char code[5]; strncpy(code,d,4); code[4]=0;
-        const char* nm=d+6;
-        char sn[20]=""; int ni=0;
-        while(nm[ni]&&nm[ni]!='('&&ni<18) { sn[ni]=nm[ni]; ni++; }
+        const char* nameStart=d;
+        const char* colon=strchr(d,':');
+        if (colon&&colon[1]==' ') nameStart=colon+2;
+        char sn[40]=""; int ni=0;
+        while(nameStart[ni]&&nameStart[ni]!='('&&ni<38) { sn[ni]=nameStart[ni]; ni++; }
         while(ni>0&&sn[ni-1]==' ') ni--;
         sn[ni]=0;
-        snprintf(dynNames[1+ei*2],64,"FX%d: %s %s",ei+1,code,sn);
+        snprintf(dynNames[1+ei*2],64,"FX%d  %s — %s",ei+1,code,sn);
+        snprintf(shortNames[1+ei*2],16,"FX%d:%s",ei+1,code);
       } else {
-        snprintf(dynNames[1+ei*2],64,"FX%d",ei+1);
+        snprintf(dynNames[1+ei*2],64,"FX%d (effect %d)",ei+1,ei+1);
+        snprintf(shortNames[1+ei*2],16,"FX%d",ei+1);
       }
     } else {
-      snprintf(dynNames[1+ei*2],64,"FX%d",ei+1);
+      snprintf(dynNames[1+ei*2],64,"FX%d (empty)",ei+1);
+      snprintf(shortNames[1+ei*2],16,"FX%d",ei+1);
     }
-    snprintf(dynNames[1+ei*2+1],64,"FX%d Val",ei+1);
-  }
-
-  char shortNames[9][16];
-  snprintf(shortNames[0],16,"Vol");
-  for (int ei=0;ei<ImMin(effectCols,4);ei++) {
-    snprintf(shortNames[1+ei*2],16,"FX%d",ei+1);
-    snprintf(shortNames[1+ei*2+1],16,"FX%d Val",ei+1);
+    int valCounts[256]={};
+    for (int r=0;r<patLen;r++) {
+      short fv=pat->newData[r][DIV_PAT_FXVAL(ei)];
+      if (fv>=0) valCounts[(unsigned char)fv]++;
+    }
+    int maxVCnt=0;
+    for (int i=0;i<256;i++) if (valCounts[i]>maxVCnt) { maxVCnt=valCounts[i]; }
+    if (maxCnt>0) {
+      const char* d=e->getEffectDesc((unsigned char)maxFx,prChan,false);
+      if (d&&d[0]) {
+        char code[5]; strncpy(code,d,4); code[4]=0;
+        snprintf(dynNames[1+ei*2+1],64,"FX%d Val  %s (value)",ei+1,code);
+      } else {
+        snprintf(dynNames[1+ei*2+1],64,"FX%d Val",ei+1);
+      }
+    } else {
+      snprintf(dynNames[1+ei*2+1],64,"FX%d Val (empty)",ei+1);
+    }
+    snprintf(shortNames[1+ei*2+1],16,"FX%dV",ei+1);
   }
 
   int maxLane=ImMin(1+effectCols*2,9);
   if (prEffectLane>=maxLane) prEffectLane=0;
   ImGui::Text("FX:"); ImGui::SameLine();
   ImGui::SetNextItemWidth(ImMax(300.0f*(float)dpiScale, ImGui::GetContentRegionAvail().x*0.35f));
-  if (ImGui::BeginCombo("##prLane",shortNames[prEffectLane])) {
+  if (ImGui::BeginCombo("##prLane",dynNames[prEffectLane])) {
     for (int i=0;i<maxLane;i++) {
       bool s=(i==prEffectLane);
       if (ImGui::Selectable(dynNames[i],s)) prEffectLane=i;
@@ -1641,9 +1766,15 @@ void FurnaceGUI::drawPianoRoll() {
       }
       if (isEffNum&&bw>=fSz.x+2) {
         const char* desc=e->getEffectDesc((unsigned char)cv,prChan,false);
-        if (desc) {
-          char sd[10]; snprintf(sd,sizeof(sd),"%.8s",desc);
-          dl->AddText(ImVec2(bx0+1,lBot-fSz.y-1),IM_COL32(220,210,100,180),sd);
+        if (desc&&desc[0]) {
+          const char* nameStart=desc;
+          const char* colon=strchr(desc,':');
+          if (colon&&colon[1]==' ') nameStart=colon+2;
+          char sd[32]=""; int ni=0;
+          while(nameStart[ni]&&nameStart[ni]!='('&&ni<30) { sd[ni]=nameStart[ni]; ni++; }
+          while(ni>0&&sd[ni-1]==' ') ni--;
+          sd[ni]=0;
+          if (ni>0) dl->AddText(ImVec2(bx0+1,lBot-fSz.y-1),IM_COL32(220,210,100,180),sd);
         }
       }
     }
@@ -1662,10 +1793,12 @@ void FurnaceGUI::drawPianoRoll() {
     dl->AddText(ImVec2(wp2.x+3,lTop),IM_COL32(160,160,160,220),topLbl);
     dl->AddText(ImVec2(wp2.x+3,lBot-fSz.y),IM_COL32(160,160,160,220),btmLbl);
     {
-      const char* nm=shortNames[prEffectLane];
+      const char* nm=dynNames[prEffectLane];
       ImVec2 nsz=ImGui::CalcTextSize(nm);
       float midY=(lTop+fSz.y+4+lBot-fSz.y-4)*0.5f-nsz.y*0.5f;
-      dl->AddText(ImVec2(wp2.x+3,midY),IM_COL32(230,230,230,255),nm);
+      dl->PushClipRect(ImVec2(wp2.x,lTop+fSz.y+4),ImVec2(wp2.x+pianoW,lBot-fSz.y-4),true);
+      dl->AddText(ImVec2(wp2.x+3,midY),IM_COL32(230,230,230,200),nm);
+      dl->PopClipRect();
     }
     dl->PopClipRect();
     dl->AddLine(ImVec2(wp2.x+pianoW,wp2.y),ImVec2(wp2.x+pianoW,wp2.y+effectLaneH),cKeyBrd,1.5f);
