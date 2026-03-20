@@ -661,14 +661,8 @@ void FurnaceGUI::drawPianoRoll() {
   }
   prPrevZoom=prZoom;
   if (prSnapTargetOrd>=0) {
-    float target=(float)prSnapTargetOrd*totalW;
-    float dt=ImGui::GetIO().DeltaTime;
-    float diff=target-prSyncScrollX;
-    prSyncScrollX+=diff*ImMin(15.0f*dt,1.0f);
-    if (fabsf(diff)<1.0f) {
-      prSyncScrollX=target;
-      prSnapTargetOrd=-1;
-    }
+    prSyncScrollX=(float)prSnapTargetOrd*totalW;
+    prSnapTargetOrd=-1;
   }
 
   ImGui::SetNextWindowContentSize(ImVec2(pianoW+allW,timelineH));
@@ -2002,12 +1996,11 @@ void FurnaceGUI::drawPianoRoll() {
   if (ImGui::BeginChild("##prFX",ImVec2(noteAreaW,effectLaneH),false,
       ImGuiWindowFlags_HorizontalScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
     if (settings.prFontScale!=1.0f) ImGui::SetWindowFontScale(settings.prFontScale);
-    ImGui::SetScrollX(prSyncScrollX);
     if (prPanDX!=0) {
-      ImGui::SetScrollX(ImGui::GetScrollX()+prPanDX);
+      prSyncScrollX=ImMax(prSyncScrollX+prPanDX,0.0f);
       prPanDX=0;
     }
-    prSyncScrollX=ImGui::GetScrollX();
+    ImGui::SetScrollX(prSyncScrollX);
     float fxSX=prSyncScrollX;
     ImDrawList* dl=ImGui::GetWindowDrawList();
     ImVec2 wp2=ImGui::GetWindowPos();
