@@ -3237,10 +3237,10 @@ float guiFxCurve(float t, float tension) {
           if ((int)round(x-macroDragLineInitial.x)<0) { \
             float span=(float)(macroDragLineInitial.x-x); \
             for (int i=0; i<=(int)round(span); i++) { \
-              int index=(int)round(x+i); \
+              int index=(int)round(macroDragLineInitial.x-i); \
               if (index<0) continue; \
               float cv=guiFxCurve((float)i/span,macroDragSlopeTension); \
-              t[index]=B30(t[index])^(int)(y+(macroDragLineInitial.y-y)*cv); \
+              t[index]=B30(t[index])^(int)(macroDragLineInitial.y+(y-macroDragLineInitial.y)*cv); \
             } \
           } else { \
             float span=(float)(x-macroDragLineInitial.x); \
