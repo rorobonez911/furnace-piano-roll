@@ -1073,6 +1073,9 @@ class DivEngine {
     // go to order
     void setOrder(unsigned char order);
 
+    // go to order + specific row
+    void seekTo(unsigned char order, int row);
+
     // update system flags
     void updateSysFlags(int system, bool restart, bool render);
 

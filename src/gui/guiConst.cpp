@@ -1256,6 +1256,21 @@ const FurnaceGUIColorDef guiColors[GUI_COLOR_MAX]={
 
   D(GUI_COLOR_EE_VALUE,"",ImVec4(0.0f,1.0f,1.0f,1.0f)),
   D(GUI_COLOR_PLAYBACK_STAT,"",ImVec4(0.6f,0.6f,0.6f,1.0f)),
+
+  D(GUI_COLOR_PIANO_ROLL_BG,"Piano Roll: Background",ImVec4(0.11f,0.11f,0.11f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_KEY_WHITE,"Piano Roll: White key",ImVec4(0.86f,0.86f,0.86f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_KEY_BLACK,"Piano Roll: Black key",ImVec4(0.15f,0.15f,0.15f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_KEY_BORDER,"Piano Roll: Key border",ImVec4(0.35f,0.35f,0.35f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_GRID,"Piano Roll: Grid",ImVec4(0.24f,0.24f,0.24f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_GRID_HI1,"Piano Roll: Grid (highlight 1)",ImVec4(0.38f,0.38f,0.38f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_GRID_HI2,"Piano Roll: Grid (highlight 2)",ImVec4(0.55f,0.55f,0.55f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_NOTE,"Piano Roll: Note",ImVec4(0.22f,0.60f,1.0f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_NOTE_OFF,"Piano Roll: Note off marker",ImVec4(0.9f,0.2f,0.2f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_NOTE_REL,"Piano Roll: Note release marker",ImVec4(0.9f,0.7f,0.1f,1.0f)),
+  D(GUI_COLOR_PIANO_ROLL_SELECTION,"Piano Roll: Selection",ImVec4(1.0f,1.0f,1.0f,0.25f)),
+  D(GUI_COLOR_PIANO_ROLL_FX_VOL,"Piano Roll: Volume lane",ImVec4(0.25f,0.82f,0.42f,0.9f)),
+  D(GUI_COLOR_PIANO_ROLL_FX_NUM,"Piano Roll: Effect number lane",ImVec4(0.88f,0.52f,0.18f,0.9f)),
+  D(GUI_COLOR_PIANO_ROLL_FX_VAL,"Piano Roll: Effect value lane",ImVec4(0.28f,0.62f,0.95f,0.9f)),
 };
 #undef D
 

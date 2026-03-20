@@ -537,6 +537,22 @@ enum FurnaceGUIColors {
 
   GUI_COLOR_EE_VALUE,
   GUI_COLOR_PLAYBACK_STAT,
+
+  GUI_COLOR_PIANO_ROLL_BG,
+  GUI_COLOR_PIANO_ROLL_KEY_WHITE,
+  GUI_COLOR_PIANO_ROLL_KEY_BLACK,
+  GUI_COLOR_PIANO_ROLL_KEY_BORDER,
+  GUI_COLOR_PIANO_ROLL_GRID,
+  GUI_COLOR_PIANO_ROLL_GRID_HI1,
+  GUI_COLOR_PIANO_ROLL_GRID_HI2,
+  GUI_COLOR_PIANO_ROLL_NOTE,
+  GUI_COLOR_PIANO_ROLL_NOTE_OFF,
+  GUI_COLOR_PIANO_ROLL_NOTE_REL,
+  GUI_COLOR_PIANO_ROLL_SELECTION,
+  GUI_COLOR_PIANO_ROLL_FX_VOL,
+  GUI_COLOR_PIANO_ROLL_FX_NUM,
+  GUI_COLOR_PIANO_ROLL_FX_VAL,
+
   GUI_COLOR_MAX
 };
 
@@ -583,7 +599,8 @@ enum FurnaceGUIWindows {
   GUI_WINDOW_USER_PRESETS,
   GUI_WINDOW_REF_PLAYER,
   GUI_WINDOW_MULTI_INS_SETUP,
-  GUI_WINDOW_SPOILER
+  GUI_WINDOW_SPOILER,
+  GUI_WINDOW_PIANO_ROLL
 };
 
 enum FurnaceGUIMobileScenes {
@@ -1697,6 +1714,8 @@ enum NoteInputModes: unsigned char {
 
 struct FurnaceCV;
 
+float guiFxCurve(float t, float tension);
+
 class FurnaceGUI {
   DivEngine* e;
 
@@ -1867,6 +1886,7 @@ class FurnaceGUI {
   struct Settings {
     bool settingsChanged;
     int mainFontSize, patFontSize, headFontSize, iconSize;
+    float prFontScale;
     int audioEngine;
     int audioQuality;
     int audioHiPass;
@@ -2125,6 +2145,7 @@ class FurnaceGUI {
       patFontSize(GUI_FONT_SIZE_DEFAULT),
       headFontSize(27),
       iconSize(GUI_ICON_SIZE_DEFAULT),
+      prFontScale(1.0f),
       audioEngine(DIV_AUDIO_SDL),
       audioQuality(0),
       audioHiPass(1),
@@ -2440,6 +2461,15 @@ class FurnaceGUI {
   bool subSongsOpen, findOpen, spoilerOpen, patManagerOpen, sysManagerOpen, clockOpen, speedOpen;
   bool groovesOpen, xyOscOpen, memoryOpen, csPlayerOpen, cvOpen, userPresetsOpen, refPlayerOpen;
   bool multiInsSetupOpen;
+  bool pianoRollOpen;
+
+  int prChan;
+  float prZoom;
+  float prNoteH;
+  float prEffectLaneH;
+  float prTimelineH;
+  bool prShowAllChans;
+  int prSelRow0, prSelRow1;
 
   bool cvNotSerious;
 
@@ -2586,6 +2616,7 @@ class FurnaceGUI {
   bool macroDragSettingBit30;
   bool macroDragLineMode;
   bool macroDragMouseMoved;
+  float macroDragSlopeTension;
   ImVec2 macroDragLineInitial;
   ImVec2 macroDragLineInitialV;
   bool macroDragActive;
@@ -3102,6 +3133,7 @@ class FurnaceGUI {
   void drawMemory();
   void drawCompatFlags();
   void drawPiano();
+  void drawPianoRoll();
   void drawNotes(bool asChild=false);
   void drawTuner();
   void drawSpectrum();

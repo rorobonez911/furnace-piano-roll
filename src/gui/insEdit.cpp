@@ -2200,6 +2200,36 @@ void FurnaceGUI::drawMacroEdit(FurnaceGUIMacroDesc& i, int totalFit, float avail
       lastMacroDesc=i;
       processDrags(ImGui::GetMousePos().x,ImGui::GetMousePos().y);
     }
+    if (macroDragActive && macroDragLineMode && macroDragMouseMoved) {
+      ImVec2 cmp=ImGui::GetMousePos();
+      if (wheelY!=0) {
+        macroDragSlopeTension=ImClamp(macroDragSlopeTension+(float)wheelY*0.5f,-3.0f,3.0f);
+        wheelY=0;
+        ImGui::GetIO().MouseWheel=0.0f;
+        processDrags((int)cmp.x,(int)cmp.y);
+      }
+      ImGui::SetTooltip("tension %.1f  (scroll to adjust)",macroDragSlopeTension);
+      ImDrawList* mdl=ImGui::GetWindowDrawList();
+      int cx=(int)((cmp.x-macroDragStart.x)*macroDragLen/ImMax(1.0f,macroDragAreaSize.x))+macroDragScroll;
+      int cy=(int)round(macroDragMax-((cmp.y-macroDragStart.y)*(double(macroDragMax-macroDragMin)/(double)ImMax(1.0f,macroDragAreaSize.y))));
+      cy=ImClamp(cy,macroDragMin,macroDragMax);
+      int initialCol=(int)macroDragLineInitial.x, initialVal=(int)macroDragLineInitial.y;
+      int pc0=ImMin(cx,initialCol), pc1=ImMax(cx,initialCol);
+      int pspan=ImMax(pc1-pc0,1);
+      float prange=ImMax((float)(macroDragMax-macroDragMin),1.0f);
+      mdl->PushClipRect(macroDragStart,ImVec2(macroDragStart.x+macroDragAreaSize.x,macroDragStart.y+macroDragAreaSize.y),true);
+      for (int rr=pc0;rr<pc1;rr++) {
+        float t0=(float)abs(initialCol-rr)/pspan, t1=(float)abs(initialCol-(rr+1))/pspan;
+        float cv0=guiFxCurve(t0,macroDragSlopeTension), cv1=guiFxCurve(t1,macroDragSlopeTension);
+        float ppv0=initialVal+(cy-initialVal)*cv0, ppv1=initialVal+(cy-initialVal)*cv1;
+        float px0=macroDragStart.x+(rr-macroDragScroll+0.5f)*macroDragAreaSize.x/macroDragLen;
+        float px1=macroDragStart.x+(rr+1-macroDragScroll+0.5f)*macroDragAreaSize.x/macroDragLen;
+        float py0=macroDragStart.y+(macroDragMax-ppv0)*macroDragAreaSize.y/prange;
+        float py1=macroDragStart.y+(macroDragMax-ppv1)*macroDragAreaSize.y/prange;
+        mdl->AddLine(ImVec2(px0,py0),ImVec2(px1,py1),IM_COL32(255,180,60,230),2.0f);
+      }
+      mdl->PopClipRect();
+    }
     if ((i.macro->open&1)) {
       if (ImGui::IsItemHovered()) {
         if (ctrlWheeling) {

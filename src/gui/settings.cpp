@@ -3115,6 +3115,16 @@ void FurnaceGUI::drawSettings() {
             if (settings.patFontSize>96) settings.patFontSize=96;
             settingsChanged=true;
           }
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::AlignTextToFramePadding();
+          ImGui::Text(_("Piano Roll font scale"));
+          ImGui::TableNextColumn();
+          if (ImGui::SliderFloat("##prFontScale",&settings.prFontScale,0.5f,3.0f,"%.2fx")) {
+            if (settings.prFontScale<0.5f) settings.prFontScale=0.5f;
+            if (settings.prFontScale>3.0f) settings.prFontScale=3.0f;
+            settingsChanged=true;
+          }
           ImGui::EndTable();
         }
 
@@ -4353,6 +4363,23 @@ void FurnaceGUI::drawSettings() {
           UI_COLOR_CONFIG(GUI_COLOR_PATTERN_STATUS_ERROR,_("Status: error"));
           ImGui::TreePop();
         }
+        if (ImGui::TreeNode(_("Piano Roll"))) {
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_BG,_("Background"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_KEY_WHITE,_("White key"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_KEY_BLACK,_("Black key"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_KEY_BORDER,_("Key border"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_GRID,_("Grid"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_GRID_HI1,_("Grid (highlight 1)"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_GRID_HI2,_("Grid (highlight 2)"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_NOTE,_("Note"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_NOTE_OFF,_("Note off marker"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_NOTE_REL,_("Note release marker"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_SELECTION,_("Selection"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_FX_VOL,_("Volume lane"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_FX_NUM,_("Effect number lane"));
+          UI_COLOR_CONFIG(GUI_COLOR_PIANO_ROLL_FX_VAL,_("Effect value lane"));
+          ImGui::TreePop();
+        }
         if (ImGui::TreeNode(_("Sample Editor"))) {
           UI_COLOR_CONFIG(GUI_COLOR_SAMPLE_BG,_("Background"));
           UI_COLOR_CONFIG(GUI_COLOR_SAMPLE_FG,_("Waveform"));
@@ -5100,6 +5127,9 @@ void FurnaceGUI::readConfig(DivConfig& conf, FurnaceGUISettingGroups groups) {
     settings.headFontSize=conf.getInt("headFontSize",27);
     settings.patFontSize=conf.getInt("patFontSize",GUI_FONT_SIZE_DEFAULT);
     settings.iconSize=conf.getInt("iconSize",GUI_ICON_SIZE_DEFAULT);
+    settings.prFontScale=conf.getFloat("prFontScale",1.0f);
+    if (settings.prFontScale<0.5f) settings.prFontScale=0.5f;
+    if (settings.prFontScale>3.0f) settings.prFontScale=3.0f;
 
     settings.mainFont=conf.getInt("mainFont",GUI_MAIN_FONT_DEFAULT);
     settings.headFont=conf.getInt("headFont",0);
@@ -5689,6 +5719,7 @@ void FurnaceGUI::writeConfig(DivConfig& conf, FurnaceGUISettingGroups groups) {
     conf.set("headFontSize",settings.headFontSize);
     conf.set("patFontSize",settings.patFontSize);
     conf.set("iconSize",settings.iconSize);
+    conf.set("prFontScale",settings.prFontScale);
 
     conf.set("mainFont",settings.mainFont);
     conf.set("headFont",settings.headFont);

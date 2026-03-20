@@ -3763,6 +3763,27 @@ void DivEngine::setOrder(unsigned char order) {
   BUSY_END;
 }
 
+void DivEngine::seekTo(unsigned char order, int row) {
+  BUSY_BEGIN_SOFT;
+  curOrder=order;
+  if (curOrder>=curSubSong->ordersLen) curOrder=0;
+  prevOrder=curOrder;
+  int goalRow=row;
+  if (goalRow<0) goalRow=0;
+  if (goalRow>=curSubSong->patLen) goalRow=curSubSong->patLen-1;
+  if (playing && !freelance) {
+    playSub(false,goalRow);
+    if (curFilePlayer && filePlayerSync) {
+      syncFilePlayer();
+      curFilePlayer->play();
+    }
+  } else {
+    curRow=goalRow;
+    prevRow=goalRow;
+  }
+  BUSY_END;
+}
+
 void DivEngine::updateSysFlags(int system, bool restart, bool render) {
   BUSY_BEGIN_SOFT;
   disCont[system].dispatch->setFlags(song.systemFlags[system]);

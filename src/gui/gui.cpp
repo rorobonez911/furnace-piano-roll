@@ -3165,6 +3165,13 @@ String FurnaceGUI::getLastError() {
   return lastError;
 }
 
+float guiFxCurve(float t, float tension) {
+  if (fabsf(tension)<0.01f) return t;
+  float base=powf(10.0f,fabsf(tension));
+  if (tension>0.0f) return (powf(base,t)-1.0f)/(base-1.0f);
+  return 1.0f-(powf(base,1.0f-t)-1.0f)/(base-1.0f);
+}
+
 // what monster did I just create here?
 #define B30(tt) (macroDragBit30?((((tt)&0xc0000000)==0x40000000 || ((tt)&0xc0000000)==0x80000000)?0x40000000:0):0)
 
@@ -3217,6 +3224,7 @@ String FurnaceGUI::getLastError() {
         macroDragLineInitialV=ImVec2(dragX,dragY); \
         macroDragInitialValueSet=true; \
         macroDragMouseMoved=false; \
+        macroDragSlopeTension=0.0f; \
       } else if (!macroDragMouseMoved) { \
         if ((pow(dragX-macroDragLineInitialV.x,2.0)+pow(dragY-macroDragLineInitialV.y,2.0))>=16.0f) { \
           macroDragMouseMoved=true; \
@@ -3227,16 +3235,20 @@ String FurnaceGUI::getLastError() {
           t[x]=B30(t[x])^(int)(macroDragLineInitial.y); \
         } else { \
           if ((int)round(x-macroDragLineInitial.x)<0) { \
-            for (int i=0; i<=(int)round(macroDragLineInitial.x-x); i++) { \
-              int index=(int)round(x+i); \
+            float span=(float)(macroDragLineInitial.x-x); \
+            for (int i=0; i<=(int)round(span); i++) { \
+              int index=(int)round(macroDragLineInitial.x-i); \
               if (index<0) continue; \
-              t[index]=B30(t[index])^(int)(y+(macroDragLineInitial.y-y)*((float)i/(float)(macroDragLineInitial.x-x))); \
+              float cv=guiFxCurve((float)i/span,macroDragSlopeTension); \
+              t[index]=B30(t[index])^(int)(macroDragLineInitial.y+(y-macroDragLineInitial.y)*cv); \
             } \
           } else { \
-            for (int i=0; i<=(int)round(x-macroDragLineInitial.x); i++) { \
+            float span=(float)(x-macroDragLineInitial.x); \
+            for (int i=0; i<=(int)round(span); i++) { \
               int index=(int)round(i+macroDragLineInitial.x); \
               if (index<0) continue; \
-              t[index]=B30(t[index])^(int)(macroDragLineInitial.y+(y-macroDragLineInitial.y)*((float)i/(x-macroDragLineInitial.x))); \
+              float cv=guiFxCurve((float)i/span,macroDragSlopeTension); \
+              t[index]=B30(t[index])^(int)(macroDragLineInitial.y+(y-macroDragLineInitial.y)*cv); \
             } \
           } \
         } \
@@ -4238,6 +4250,7 @@ bool FurnaceGUI::loop() {
   DECLARE_METRIC(userPresets)
   DECLARE_METRIC(refPlayer)
   DECLARE_METRIC(multiInsSetup)
+  DECLARE_METRIC(pianoRoll)
   DECLARE_METRIC(popup)
 
 #ifdef IS_MOBILE
@@ -4888,6 +4901,7 @@ bool FurnaceGUI::loop() {
         IMPORT_CLOSE(userPresetsOpen);
         IMPORT_CLOSE(refPlayerOpen);
         IMPORT_CLOSE(multiInsSetupOpen);
+        IMPORT_CLOSE(pianoRollOpen);
       } else if (pendingLayoutImportStep==1) {
         // let the UI settle
       } else if (pendingLayoutImportStep==2) {
@@ -5266,6 +5280,7 @@ bool FurnaceGUI::loop() {
         if (ImGui::MenuItem(_("effect list"),BIND_FOR(GUI_ACTION_WINDOW_EFFECT_LIST),effectListOpen)) effectListOpen=!effectListOpen;
         if (ImGui::MenuItem(_("play/edit controls"),BIND_FOR(GUI_ACTION_WINDOW_EDIT_CONTROLS),editControlsOpen)) editControlsOpen=!editControlsOpen;
         if (ImGui::MenuItem(_("piano/input pad"),BIND_FOR(GUI_ACTION_WINDOW_PIANO),pianoOpen)) pianoOpen=!pianoOpen;
+        if (ImGui::MenuItem(_("piano roll"),NULL,pianoRollOpen)) pianoRollOpen=!pianoRollOpen;
         if (ImGui::MenuItem(_("reference music player"),BIND_FOR(GUI_ACTION_WINDOW_REF_PLAYER),refPlayerOpen)) refPlayerOpen=!refPlayerOpen;
         if (ImGui::MenuItem(_("multi-ins setup"),BIND_FOR(GUI_ACTION_WINDOW_MULTI_INS_SETUP),multiInsSetupOpen)) multiInsSetupOpen=!multiInsSetupOpen;
         if (spoilerOpen) if (ImGui::MenuItem(_("spoiler"),NULL,spoilerOpen)) spoilerOpen=!spoilerOpen;
@@ -5483,6 +5498,7 @@ bool FurnaceGUI::loop() {
       MEASURE(userPresets,drawUserPresets());
       MEASURE(refPlayer,drawRefPlayer());
       MEASURE(multiInsSetup,drawMultiInsSetup());
+      MEASURE(pianoRoll,drawPianoRoll());
       MEASURE(patManager,drawPatManager());
       MEASURE(tuner,drawTuner());
       MEASURE(spectrum,drawSpectrum());
@@ -5533,6 +5549,7 @@ bool FurnaceGUI::loop() {
       MEASURE(userPresets,drawUserPresets());
       MEASURE(refPlayer,drawRefPlayer());
       MEASURE(multiInsSetup,drawMultiInsSetup());
+      MEASURE(pianoRoll,drawPianoRoll());
 
     }
 
@@ -8432,6 +8449,13 @@ void FurnaceGUI::syncState() {
   userPresetsOpen=e->getConfBool("userPresetsOpen",false);
   refPlayerOpen=e->getConfBool("refPlayerOpen",false);
   multiInsSetupOpen=e->getConfBool("multiInsSetupOpen",false);
+  pianoRollOpen=e->getConfBool("pianoRollOpen",false);
+  prChan=e->getConfInt("prChan",0);
+  prZoom=e->getConfFloat("prZoom",1.0f);
+  prNoteH=e->getConfFloat("prNoteH",8.0f);
+  prEffectLaneH=e->getConfFloat("prEffectLaneH",120.0f);
+  prTimelineH=e->getConfFloat("prTimelineH",18.0f);
+  prShowAllChans=e->getConfBool("prShowAllChans",false);
 
   insListDir=e->getConfBool("insListDir",false);
   waveListDir=e->getConfBool("waveListDir",false);
@@ -8613,6 +8637,13 @@ void FurnaceGUI::commitState(DivConfig& conf) {
   conf.set("userPresetsOpen",userPresetsOpen);
   conf.set("refPlayerOpen",refPlayerOpen);
   conf.set("multiInsSetupOpen",multiInsSetupOpen);
+  conf.set("pianoRollOpen",pianoRollOpen);
+  conf.set("prChan",prChan);
+  conf.set("prZoom",prZoom);
+  conf.set("prNoteH",prNoteH);
+  conf.set("prEffectLaneH",prEffectLaneH);
+  conf.set("prTimelineH",prTimelineH);
+  conf.set("prShowAllChans",prShowAllChans);
 
   // commit dir state
   conf.set("insListDir",insListDir);
@@ -9064,6 +9095,15 @@ FurnaceGUI::FurnaceGUI():
   userPresetsOpen(false),
   refPlayerOpen(false),
   multiInsSetupOpen(false),
+  pianoRollOpen(false),
+  prChan(0),
+  prZoom(1.0f),
+  prNoteH(8.0f),
+  prEffectLaneH(120.0f),
+  prTimelineH(18.0f),
+  prShowAllChans(false),
+  prSelRow0(-1),
+  prSelRow1(-1),
   cvNotSerious(false),
   shortIntro(false),
   insListDir(false),
@@ -9178,6 +9218,7 @@ FurnaceGUI::FurnaceGUI():
   macroDragSettingBit30(false),
   macroDragLineMode(false),
   macroDragMouseMoved(false),
+  macroDragSlopeTension(0.0f),
   macroDragLineInitial(0,0),
   macroDragLineInitialV(0,0),
   macroDragActive(false),
