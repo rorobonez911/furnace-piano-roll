@@ -639,9 +639,17 @@ void FurnaceGUI::drawPianoRoll() {
   int hiA=ImMax((int)e->curSubSong->hilightA,1);
   int hiB=ImMax((int)e->curSubSong->hilightB,1);
 
-  if (prFollow&&e->isPlaying()) {
-    float absX=pianoW+(float)ord*totalW+oldRow*rowW;
-    prSyncScrollX=ImMax(absX-noteAreaW*0.35f,0.0f);
+  if (e->isPlaying()) {
+    if (prFollow) {
+      float absX=pianoW+(float)ord*totalW+oldRow*rowW;
+      prSyncScrollX=ImMax(absX-noteAreaW*0.35f,0.0f);
+    } else if (prFollowPrevPlayOrd>=0&&playOrder!=prFollowPrevPlayOrd) {
+      float absX=pianoW+(float)ord*totalW;
+      prSyncScrollX=ImMax(absX-noteAreaW*0.1f,0.0f);
+    }
+    prFollowPrevPlayOrd=playOrder;
+  } else {
+    prFollowPrevPlayOrd=-1;
   }
 
   ImGui::SetNextWindowContentSize(ImVec2(pianoW+allW,timelineH));
