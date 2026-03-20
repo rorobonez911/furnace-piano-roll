@@ -527,9 +527,9 @@ void FurnaceGUI::drawPianoRoll() {
       ImGui::Separator();
       ImGui::TextDisabled("Selection");
       ImGui::BulletText("Shift+drag — box select (any mode)");
-      ImGui::BulletText("Shift+\xe2\x86\x91\xe2\x86\x93 — transpose \xc2\xb11 semitone");
+      ImGui::BulletText("Shift+\xe2\x86\x91\xe2\x86\x93 — transpose \xc2\xb1" "1 semitone");
       ImGui::BulletText("Ctrl+Shift+\xe2\x86\x91\xe2\x86\x93 — transpose \xc2\xb1 octave");
-      ImGui::BulletText("Shift+\xe2\x86\x90\xe2\x86\x92 — move selection \xc2\xb11 row");
+      ImGui::BulletText("Shift+\xe2\x86\x90\xe2\x86\x92 — move selection \xc2\xb1" "1 row");
       ImGui::BulletText("Ctrl+A — select all");
       ImGui::BulletText("Ctrl+C / Ctrl+V — copy / paste");
       ImGui::BulletText("Delete — erase selection");
