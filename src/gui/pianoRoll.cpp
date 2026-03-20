@@ -73,6 +73,8 @@ static std::vector<PrDragNote> prDragBuf;
 static int prPreviewTimer=0;
 static int prPreviewChan=-1;
 static int prFollowPrevPlayOrd=-1;
+static int prSnapTargetOrd=-1;
+static float prPrevZoom=1.0f;
 static bool  prKbdShowConfig=false;
 static const char* const PR_NOTE_LBL[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 
@@ -643,13 +645,30 @@ void FurnaceGUI::drawPianoRoll() {
     if (prFollow) {
       float absX=pianoW+(float)ord*totalW+oldRow*rowW;
       prSyncScrollX=ImMax(absX-noteAreaW*0.35f,0.0f);
-    } else if (prFollowPrevPlayOrd>=0&&playOrder!=prFollowPrevPlayOrd) {
-      float absX=pianoW+(float)ord*totalW;
-      prSyncScrollX=ImMax(absX-noteAreaW*0.1f,0.0f);
+      prSnapTargetOrd=-1;
+    } else {
+      bool orderChanged=(prFollowPrevPlayOrd<0||playOrder!=prFollowPrevPlayOrd);
+      bool zoomChanged=(prZoom!=prPrevZoom);
+      if (orderChanged||zoomChanged) {
+        if (orderChanged&&prZoom<1.0f) prZoom=1.0f;
+        prSnapTargetOrd=ord;
+      }
     }
     prFollowPrevPlayOrd=playOrder;
   } else {
     prFollowPrevPlayOrd=-1;
+    prSnapTargetOrd=-1;
+  }
+  prPrevZoom=prZoom;
+  if (prSnapTargetOrd>=0) {
+    float target=(float)prSnapTargetOrd*totalW;
+    float dt=ImGui::GetIO().DeltaTime;
+    float diff=target-prSyncScrollX;
+    prSyncScrollX+=diff*ImMin(15.0f*dt,1.0f);
+    if (fabsf(diff)<1.0f) {
+      prSyncScrollX=target;
+      prSnapTargetOrd=-1;
+    }
   }
 
   ImGui::SetNextWindowContentSize(ImVec2(pianoW+allW,timelineH));
@@ -1979,10 +1998,11 @@ void FurnaceGUI::drawPianoRoll() {
       ?ImGui::ColorConvertFloat4ToU32(uiColors[GUI_COLOR_PIANO_ROLL_FX_NUM])
       :ImGui::ColorConvertFloat4ToU32(uiColors[GUI_COLOR_PIANO_ROLL_FX_VAL]));
 
-  ImGui::SetNextWindowContentSize(ImVec2(pianoW+totalW,effectLaneH));
+  ImGui::SetNextWindowContentSize(ImVec2(pianoW+allW,effectLaneH));
   if (ImGui::BeginChild("##prFX",ImVec2(noteAreaW,effectLaneH),false,
       ImGuiWindowFlags_HorizontalScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
     if (settings.prFontScale!=1.0f) ImGui::SetWindowFontScale(settings.prFontScale);
+    ImGui::SetScrollX(prSyncScrollX);
     if (prPanDX!=0) {
       ImGui::SetScrollX(ImGui::GetScrollX()+prPanDX);
       prPanDX=0;
@@ -1992,17 +2012,18 @@ void FurnaceGUI::drawPianoRoll() {
     ImDrawList* dl=ImGui::GetWindowDrawList();
     ImVec2 wp2=ImGui::GetWindowPos();
     float ox2=wp2.x-fxSX;
+    float fxBase=ox2+pianoW+(float)ord*totalW;
     float vx0=wp2.x,vx1=wp2.x+ImGui::GetWindowWidth();
     float sbSz=ImGui::GetStyle().ScrollbarSize;
     float lBot=wp2.y+ImGui::GetWindowHeight()-sbSz-2;
     float lTop=wp2.y+2;
     float lH=lBot-lTop;
 
-    dl->AddRectFilled(wp2,ImVec2(wp2.x+pianoW+totalW,wp2.y+effectLaneH),
+    dl->AddRectFilled(ImVec2(fxBase,wp2.y),ImVec2(fxBase+totalW,wp2.y+effectLaneH),
       prColorMulAlpha(uiColors[GUI_COLOR_PIANO_ROLL_BG],0.85f));
 
     for (int r=0;r<=patLen;r++) {
-      float cx=ox2+pianoW+r*rowW;
+      float cx=fxBase+r*rowW;
       if (cx<vx0-rowW||cx>vx1+rowW) continue;
       dl->AddLine(ImVec2(cx,wp2.y),ImVec2(cx,wp2.y+effectLaneH),
         (r%hiB==0)?cGridHi2:(r%hiA==0)?cGridHi1:cGrid);
@@ -2010,20 +2031,20 @@ void FurnaceGUI::drawPianoRoll() {
     ImVec2 fSz=ImGui::CalcTextSize("FF");
     for (int q=1;q<4;q++) {
       float qy=lBot-lH*(q/4.0f);
-      dl->AddLine(ImVec2(ox2+pianoW,qy),ImVec2(ox2+pianoW+totalW,qy),
+      dl->AddLine(ImVec2(fxBase,qy),ImVec2(fxBase+totalW,qy),
         (q==2)?cGridHi1:cGrid);
       char qlbl[8];
       int qv=(int)(laneMax*q/4.0f+0.5f);
       if (prEffectLane==0) snprintf(qlbl,8,"%d",qv);
       else snprintf(qlbl,8,"%02X",(unsigned char)qv);
-      dl->AddText(ImVec2(ox2+pianoW+2,qy-fSz.y*0.5f),IM_COL32(140,140,140,100),qlbl);
+      dl->AddText(ImVec2(fxBase+2,qy-fSz.y*0.5f),IM_COL32(140,140,140,100),qlbl);
     }
     for (int r=0;r<patLen;r++) {
       short val=pat->newData[r][laneCol];
       if (val<0) continue;
       short cv=(short)ImClamp((int)val,0,laneMax);
-      float bx0=ox2+pianoW+r*rowW+1;
-      float bx1=ox2+pianoW+(r+1)*rowW-1;
+      float bx0=fxBase+r*rowW+1;
+      float bx1=fxBase+(r+1)*rowW-1;
       if (bx1<vx0||bx0>vx1) continue;
       float norm=(laneMax>0)?(float)cv/(float)laneMax:0.0f;
       float bh=ImMax(norm*lH,2.0f);
@@ -2053,7 +2074,7 @@ void FurnaceGUI::drawPianoRoll() {
     }
 
     if (e->isPlaying()&&playOrder==ord) {
-      float phx=ox2+pianoW+oldRow*rowW;
+      float phx=ox2+pianoW+(float)playOrder*totalW+oldRow*rowW;
       dl->AddLine(ImVec2(phx,wp2.y),ImVec2(phx,wp2.y+effectLaneH),cHead,2.0f);
     }
 
@@ -2085,8 +2106,8 @@ void FurnaceGUI::drawPianoRoll() {
         float t0=(float)(rr-sr0)/span, t1=(float)(rr+1-sr0)/span;
         float c0=prFxCurve(t0,prFxSlopeTension), c1=prFxCurve(t1,prFxSlopeTension);
         float pv0=sv0+(sv1-sv0)*c0, pv1=sv0+(sv1-sv0)*c1;
-        float x0=ox2+pianoW+rr*rowW+rowW*0.5f;
-        float x1=ox2+pianoW+(rr+1)*rowW+rowW*0.5f;
+        float x0=fxBase+rr*rowW+rowW*0.5f;
+        float x1=fxBase+(rr+1)*rowW+rowW*0.5f;
         float y0=lBot-(pv0/ImMax((float)laneMax,1.0f))*lH;
         float y1=lBot-(pv1/ImMax((float)laneMax,1.0f))*lH;
         if (x1>=vx0&&x0<=vx1)
@@ -2097,20 +2118,21 @@ void FurnaceGUI::drawPianoRoll() {
     }
 
     ImGui::SetCursorPos(ImVec2(0,0));
-    ImGui::InvisibleButton("##prFXClick",ImVec2(pianoW+totalW,effectLaneH));
+    ImGui::InvisibleButton("##prFXClick",ImVec2(pianoW+allW,effectLaneH));
     bool fxHov=ImGui::IsItemHovered();
 
     ImVec2 fxMp=ImGui::GetMousePos();
     float fxLx=fxMp.x-wp2.x+fxSX;
     float fxLy=fxMp.y-wp2.y;
-    int fxRow=ImClamp((int)((fxLx-pianoW)/rowW),0,patLen-1);
+    int fxAbsRow=(int)((fxLx-pianoW)/rowW);
+    int fxRow=ImClamp(fxAbsRow-(ord*patLen),0,patLen-1);
     float fxNorm=ImClamp(1.0f-(fxLy-lTop+wp2.y)/lH,0.0f,1.0f);
     int fxPv=(int)(fxNorm*(float)laneMax+0.5f);
 
     if (fxHov||prFxSlopeActive) {
       if (!prFxSlopeActive) {
         float pvy=lBot-((float)fxPv/ImMax(laneMax,1))*lH;
-        dl->AddLine(ImVec2(ox2+pianoW,pvy),ImVec2(ox2+pianoW+totalW,pvy),
+        dl->AddLine(ImVec2(fxBase,pvy),ImVec2(fxBase+totalW,pvy),
           IM_COL32(255,255,100,110),1.0f);
         char tip[160];
         if (prEffectLane==0) snprintf(tip,sizeof(tip),"Vol: %d / %d",fxPv,laneMax);
