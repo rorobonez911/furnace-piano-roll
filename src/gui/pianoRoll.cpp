@@ -796,6 +796,14 @@ void FurnaceGUI::drawPianoRoll() {
         float dim=blk?(0.72f*dimFactor):(1.0f*dimFactor);
         dl->AddRectFilled(ImVec2(oBase,ry0),ImVec2(oBase+totalW,ry1),
           IM_COL32((int)(bgV.x*dim*255),(int)(bgV.y*dim*255),(int)(bgV.z*dim*255),255));
+        if (prScaleType>0) {
+          int rel=((dn%12)-prScaleRoot+12)%12;
+          const int* siv=PR_SCALE_IV[prScaleType-1];
+          bool inScale=false;
+          for (int si=0;si<7;si++) if (siv[si]==rel) { inScale=true; break; }
+          if (inScale)
+            dl->AddRectFilled(ImVec2(oBase,ry0),ImVec2(oBase+totalW,ry1),IM_COL32(80,140,255,28));
+        }
         dl->AddLine(ImVec2(oBase,ry1),ImVec2(oBase+totalW,ry1),
           (dn%12==0)?cGridHi1:cGrid);
       }
@@ -1001,7 +1009,7 @@ void FurnaceGUI::drawPianoRoll() {
       float curBase=ox+pianoW+(float)ord*totalW;
       for (auto& dn:prDragBuf) {
         int nr=ImClamp(dn.row+prDragDeltaR,0,patLen-1);
-        int nn=ImClamp((int)dn.note+prDragDeltaN,0,NOTES-1);
+        int nn=prSnapScale(ImClamp((int)dn.note+prDragDeltaN,0,NOTES-1));
         int nEnd=ImClamp(dn.endRow+prDragDeltaR,0,patLen);
         float gx0=curBase+nr*rowW+1;
         float gx1=curBase+ImMin(nEnd,nr+1)*rowW-1;
@@ -1045,8 +1053,14 @@ void FurnaceGUI::drawPianoRoll() {
       float ry0=oy+n*noteH,ry1=ry0+noteH;
       if (ry1<vy0||ry0>vy1) continue;
       bool held=(prPianoHeld==dn);
+      bool inScaleKey=false;
+      if (prScaleType>0) {
+        int rel=((dn%12)-prScaleRoot+12)%12;
+        const int* siv2=PR_SCALE_IV[prScaleType-1];
+        for (int si=0;si<7;si++) if (siv2[si]==rel) { inScaleKey=true; break; }
+      }
       dl->AddRectFilled(ImVec2(pkx,ry0),ImVec2(pkx+pianoW,ry1),
-        held?IM_COL32(180,210,255,255):cKeyW);
+        held?IM_COL32(180,210,255,255):inScaleKey?IM_COL32(160,210,255,255):cKeyW);
       dl->AddLine(ImVec2(pkx,ry1),ImVec2(pkx+pianoW,ry1),cKeyBrd);
       char lb[8]; lb[0]=0;
       bool isC=(dn%12==0);
@@ -1071,8 +1085,14 @@ void FurnaceGUI::drawPianoRoll() {
       float ry0=oy+n*noteH,ry1=ry0+noteH;
       if (ry1<vy0||ry0>vy1) continue;
       bool held=(prPianoHeld==dn);
+      bool inScaleBlk=false;
+      if (prScaleType>0) {
+        int rel=((dn%12)-prScaleRoot+12)%12;
+        const int* siv3=PR_SCALE_IV[prScaleType-1];
+        for (int si=0;si<7;si++) if (siv3[si]==rel) { inScaleBlk=true; break; }
+      }
       dl->AddRectFilled(ImVec2(pkx,ry0),ImVec2(pkx+bkw,ry1),
-        held?IM_COL32(60,100,180,255):cKeyB);
+        held?IM_COL32(60,100,180,255):inScaleBlk?IM_COL32(30,80,160,255):cKeyB);
       dl->AddRect(ImVec2(pkx,ry0),ImVec2(pkx+bkw,ry1),cKeyBrd,0.0f,0,0.8f);
       if (showBlack) {
         char lb[8];
@@ -1100,7 +1120,7 @@ void FurnaceGUI::drawPianoRoll() {
       int absRow=(!inPiano)?(int)((lx-pianoW)/rowW):-1;
       int clickOrd=(absRow>=0)?ImClamp(absRow/patLen,0,ordersLen-1):ord;
       int mrow=(absRow>=0)?(absRow-clickOrd*patLen):-1;
-      int mnote=ImClamp(NOTES-1-(int)(ly/noteH),0,NOTES-1);
+      int mnote=prSnapScale(ImClamp(NOTES-1-(int)(ly/noteH),0,NOTES-1));
 
       if (clickOrd!=ord&&!prPainting&&!prErasing&&!prResizing&&!prDragging&&!prDragMaybe&&!prSelecting) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)||ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
@@ -1350,7 +1370,7 @@ void FurnaceGUI::drawPianoRoll() {
         }
 
         if (prPainting&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-          int pn=prSnapScale(mnote);
+          int pn=mnote;
           int insToUse=(curIns>=0)?curIns:(prevIns>=0?prevIns:-1);
           int paintCh=prChan;
           if (prPolyEnabled&&prChanEnd>prChan) {
@@ -1469,11 +1489,12 @@ void FurnaceGUI::drawPianoRoll() {
                 if (tp&&tp->newData[prDragStartR][DIV_PAT_NOTE]==prDragStartN) { rpPat=tp; rpCh=tc; break; }
               }
             }
-            rpPat->newData[prDragStartR][DIV_PAT_NOTE]=(short)prDragClickN;
-            prLastNote=prDragClickN;
+            int snappedClick=prSnapScale(prDragClickN);
+            rpPat->newData[prDragStartR][DIV_PAT_NOTE]=(short)snappedClick;
+            prLastNote=snappedClick;
             int insToUse=(curIns>=0)?curIns:(prevIns>=0?prevIns:-1);
             if (prPreviewTimer>0&&prPreviewChan>=0) e->noteOff(prPreviewChan);
-            e->noteOn(rpCh,insToUse>=0?insToUse:0,prDragClickN-60);
+            e->noteOn(rpCh,insToUse>=0?insToUse:0,snappedClick-60);
             prPreviewTimer=15; prPreviewChan=rpCh;
             MARK_MODIFIED;
           }
@@ -1488,7 +1509,7 @@ void FurnaceGUI::drawPianoRoll() {
           prDragging=false;
           for (auto& dn:prDragBuf) {
             int nr=ImClamp(dn.row+prDragDeltaR,0,patLen-1);
-            int nn=ImClamp((int)dn.note+prDragDeltaN,0,NOTES-1);
+            int nn=prSnapScale(ImClamp((int)dn.note+prDragDeltaN,0,NOTES-1));
             int cpIdx=e->curSubSong->orders.ord[dn.chan][ord];
             DivPattern* cp=e->curPat[dn.chan].getPattern(cpIdx,true);
             if (!cp) continue;
@@ -1591,9 +1612,9 @@ void FurnaceGUI::drawPianoRoll() {
           for (int r=selR0;r<=selR1;r++) {
             short nv=pat->newData[r][DIV_PAT_NOTE];
             if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv+1<NOTES)
-              pat->newData[r][DIV_PAT_NOTE]=nv+1;
+              pat->newData[r][DIV_PAT_NOTE]=(short)prSnapScale(nv+1);
           }
-          prSelN0=ImClamp(prSelN0+1,0,NOTES-1); prSelN1=ImClamp(prSelN1+1,0,NOTES-1);
+          prSelN0=ImClamp(prSnapScale(prSelN0+1),0,NOTES-1); prSelN1=ImClamp(prSnapScale(prSelN1+1),0,NOTES-1);
           makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
         }
         if (ImGui::MenuItem("-1 semitone")) {
@@ -1601,9 +1622,9 @@ void FurnaceGUI::drawPianoRoll() {
           for (int r=selR0;r<=selR1;r++) {
             short nv=pat->newData[r][DIV_PAT_NOTE];
             if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)&&nv-1>=0)
-              pat->newData[r][DIV_PAT_NOTE]=nv-1;
+              pat->newData[r][DIV_PAT_NOTE]=(short)prSnapScale(nv-1);
           }
-          prSelN0=ImClamp(prSelN0-1,0,NOTES-1); prSelN1=ImClamp(prSelN1-1,0,NOTES-1);
+          prSelN0=ImClamp(prSnapScale(prSelN0-1),0,NOTES-1); prSelN1=ImClamp(prSnapScale(prSelN1-1),0,NOTES-1);
           makeUndo(GUI_UNDO_PATTERN_EDIT); MARK_MODIFIED;
         }
         if (ImGui::MenuItem("+1 octave")) {
@@ -1754,8 +1775,8 @@ void FurnaceGUI::drawPianoRoll() {
             for (int r=selR0;r<=selR1;r++) {
               short nv=pat->newData[r][DIV_PAT_NOTE];
               if (nv>=selN0&&nv<=selN1&&!prIsSpecial(nv)) {
-                int nn=nv+tDir;
-                if (nn>=0&&nn<NOTES) pat->newData[r][DIV_PAT_NOTE]=(short)nn;
+                int nn=prSnapScale(ImClamp(nv+tDir,0,NOTES-1));
+                pat->newData[r][DIV_PAT_NOTE]=(short)nn;
               }
             }
             prSelN0=ns0; prSelN1=ns1;
