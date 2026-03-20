@@ -594,7 +594,7 @@ void FurnaceGUI::drawPianoRoll() {
   const float noteAreaW=availW;
   const float totalH=NOTES*noteH;
 
-  if (prFollow&&e->isPlaying()&&playOrder>=0&&playOrder<e->curSubSong->ordersLen)
+  if (e->isPlaying()&&playOrder>=0&&playOrder<e->curSubSong->ordersLen)
     curOrder=playOrder;
 
   int ord=curOrder;
